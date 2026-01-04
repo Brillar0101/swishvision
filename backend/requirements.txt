@@ -1,0 +1,33 @@
+# Web framework
+fastapi==0.109.0
+uvicorn==0.27.0
+
+# Video processing
+opencv-python==4.9.0.80
+ffmpeg-python==0.2.0
+
+# ML and detection
+torch==2.1.2
+torchvision==0.16.2
+ultralytics==8.1.0
+
+# Image processing
+pillow==10.2.0
+numpy==1.26.3
+
+# Database
+sqlalchemy==2.0.25
+psycopg2-binary==2.9.9
+alembic==1.13.1
+
+# Background tasks
+celery==5.3.6
+redis==5.0.1
+
+# Storage
+boto3==1.34.14
+
+# Utilities
+python-dotenv==1.0.0
+pydantic==2.5.3
+python-multipart==0.0.6
