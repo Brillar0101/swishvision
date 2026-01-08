@@ -98,7 +98,7 @@ class JerseyNumberDetector:
         
         print("Loading number OCR model...")
         self.number_ocr_model = get_model(
-            model_id="basketball-jersey-numbers-ocr/3",
+            model_id="basketball-jersey-numbers-ocr/7",
             api_key=os.getenv("ROBOFLOW_API_KEY")
         )
         
@@ -414,7 +414,7 @@ def process_video_jersey_numbers(
                 label = f"#{jersey_num}"
                 (w, h), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)
                 cv2.rectangle(annotated, (x1, y1 - h - 10), (x1 + w + 6, y1), color, -1)
-                cv2.putText(annotated, label, (x1 + 3, y1 - 5),
+                cv2.putText(annotated, lab el, (x1 + 3, y1 - 5),
                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
         
         out_video.write(annotated)
@@ -452,10 +452,10 @@ def process_video_jersey_numbers(
 
 if __name__ == "__main__":
     results = process_video_jersey_numbers(
-        video_path="/Users/barakaeli/Desktop/Github Projects/swishvision/test_videos/test_game.mp4",
-        output_dir="/Users/barakaeli/Desktop/Github Projects/swishvision/outputs/jersey_test",
+        video_path="/workspace/swishvision/test_videos/test_game.mp4",
+        output_dir="/workspace/swishvision/outputs/jersey_test",
         max_seconds=99999.0,  # Full video
-        ocr_interval=5,  # OCR every 5 frames (same as reference)
+        ocr_interval=1,  # OCR every 5 frames (same as reference)
     )
     print("\n" + "="*60)
     print("FINAL RESULTS:")
