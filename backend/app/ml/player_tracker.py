@@ -1,6 +1,6 @@
 """
 Player tracking using SAM2 for video segmentation.
-Includes team classification, tactical view, and jersey number detection.
+Includes team classification, tactical view, and pose-guided jersey number detection.
 """
 import os
 import cv2
@@ -20,6 +20,7 @@ from app.ml.tactical_view import TacticalView, create_combined_view
 
 PLAYER_CLASS_IDS = [3, 4, 5, 6, 7]
 REFEREE_CLASS_IDS = [0, 1, 2]
+JERSEY_OCR_INTERVAL = 3  # Run jersey OCR every N frames for efficiency
 
 
 def compute_iou(box1, box2):
@@ -71,9 +72,9 @@ class PlayerTracker:
         self.jersey_detector = None
         if enable_jersey_numbers:
             try:
-                from app.ml.jersey_number_detector import JerseyNumberDetector
-                self.jersey_detector = JerseyNumberDetector()
-                print("Jersey number detection enabled")
+                from app.ml.jersey_number_detector import PoseGuidedJerseyDetector
+                self.jersey_detector = PoseGuidedJerseyDetector()
+                print("Pose-guided jersey number detection enabled")
             except Exception as e:
                 print(f"Jersey number detection disabled: {e}")
     
@@ -277,16 +278,19 @@ class PlayerTracker:
             
             jersey_numbers = {}
             if use_jersey_detection:
-                print("Detecting jersey numbers...")
+                print("Detecting jersey numbers (pose-guided)...")
                 self.jersey_detector.clear_cache()
-                
-                for fidx in range(0, frame_count, max(1, frame_count // 10)):
+
+                # Process frames at regular intervals for jersey detection
+                ocr_frames = list(range(0, frame_count, JERSEY_OCR_INTERVAL))
+
+                for fidx in ocr_frames:
                     if fidx not in video_segments:
                         continue
-                    
+
                     frame = frames[fidx]
-                    boxes, obj_ids_list = [], []
-                    
+                    boxes, obj_ids_list, masks_list = [], [], []
+
                     for obj_id, mask in video_segments[fidx].items():
                         if obj_id not in tracking_info or tracking_info[obj_id]['class'] == 'referee':
                             continue
@@ -294,19 +298,37 @@ class PlayerTracker:
                         if box is not None:
                             boxes.append(box)
                             obj_ids_list.append(obj_id)
-                    
+                            masks_list.append(mask.squeeze())
+
                     if not boxes:
                         continue
-                    
-                    player_dets = sv.Detections(xyxy=np.array(boxes), class_id=np.array([3] * len(boxes)))
-                    frame_numbers = self.jersey_detector.process_frame(frame, player_dets, tracker_ids=np.array(obj_ids_list))
+
+                    # Create detections with masks for pose-guided jersey detection
+                    masks_array = np.array(masks_list) if masks_list else None
+
+                    # Use the new pose-guided process_frame method
+                    frame_numbers = self.jersey_detector.process_frame(
+                        frame=frame,
+                        player_boxes=np.array(boxes),
+                        tracker_ids=np.array(obj_ids_list),
+                        player_masks=masks_array
+                    )
                     jersey_numbers.update(frame_numbers)
-                
+
+                    # Progress update
+                    if fidx % 30 == 0:
+                        stats = self.jersey_detector.get_stats()
+                        print(f"  Frame {fidx}: {stats['confirmed_players']} confirmed, "
+                              f"{stats['pose_success']} pose / {stats['fallback']} fallback")
+
+                # Update tracking info with confirmed jersey numbers
                 for obj_id, number in jersey_numbers.items():
                     if obj_id in tracking_info:
                         tracking_info[obj_id]['jersey_number'] = number
-                
-                print(f"  Detected {len(jersey_numbers)} jersey numbers")
+
+                stats = self.jersey_detector.get_stats()
+                print(f"  Detected {len(jersey_numbers)} jersey numbers "
+                      f"({stats['pose_success']} pose-guided, {stats['fallback']} fallback crops)")
             
             print("Initializing tactical view...")
             tactical_view = TacticalView()
