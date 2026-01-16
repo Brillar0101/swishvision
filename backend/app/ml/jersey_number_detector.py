@@ -635,9 +635,15 @@ def process_video_jersey_numbers(
 
 
 if __name__ == "__main__":
+    import os
+    # Auto-detect base path
+    base_path = os.path.expanduser("~/swishvision")
+    if not os.path.exists(base_path):
+        base_path = "/workspace/swishvision"  # Fallback for RunPod
+
     results = process_video_jersey_numbers(
-        video_path="/workspace/swishvision/test_videos/test_game.mp4",
-        output_dir="/workspace/swishvision/outputs/jersey_pose_test",
+        video_path=f"{base_path}/test_videos/test_game.mp4",
+        output_dir=f"{base_path}/outputs/jersey_pose_test",
         max_seconds=99999.0,
         ocr_interval=3,
         pose_model="yolov8x-pose-640"
