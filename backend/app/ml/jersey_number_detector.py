@@ -272,26 +272,71 @@ class PoseGuidedJerseyDetector:
     def _init_parseq(self):
         """Initialize PARSeq model for scene text recognition."""
         try:
-            # Load PARSeq model from torch hub
-            self.parseq_model = torch.hub.load(
-                'baudm/parseq',
-                'parseq',
-                pretrained=True,
-                trust_repo=True
-            ).eval().to(self.device)
+            import urllib.request
+            import tempfile
 
-            # Get the image transform from the model
-            self.parseq_transform = SceneTextDataModule.get_transform(
-                self.parseq_model.hparams.img_size
+            # Download PARSeq checkpoint directly
+            weights_url = "https://github.com/baudm/parseq/releases/download/v1.0.0/parseq-bb5792a6.pt"
+            weights_path = os.path.join(tempfile.gettempdir(), "parseq-bb5792a6.pt")
+
+            if not os.path.exists(weights_path):
+                print(f"    Downloading PARSeq weights...")
+                urllib.request.urlretrieve(weights_url, weights_path)
+                print(f"    Downloaded to {weights_path}")
+
+            # Load state dict
+            state_dict = torch.load(weights_path, map_location='cpu')
+
+            from strhub.models.parseq.model import PARSeq as PARSeqModel
+            from strhub.data.utils import Tokenizer
+
+            # Standard charset (94 printable ASCII chars)
+            # The pretrained model uses: digits + lowercase + uppercase + punctuation
+            charset = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ!"#$%&\'()*+,-./:;<=>?@[\\]^_`{|}~ '
+
+            # Create tokenizer - adds 3 special tokens: [B], [E], [P]
+            tokenizer = Tokenizer(charset)
+
+            # Get actual num_tokens from weights (text_embed has vocab size)
+            num_tokens = state_dict['text_embed.embedding.weight'].shape[0]
+
+            self.parseq_model = PARSeqModel(
+                num_tokens=num_tokens,
+                max_label_length=25,
+                img_size=(32, 128),
+                patch_size=(4, 8),
+                embed_dim=384,
+                enc_num_heads=6,
+                enc_mlp_ratio=4,
+                enc_depth=12,
+                dec_num_heads=12,
+                dec_mlp_ratio=4,
+                dec_depth=1,
+                decode_ar=True,
+                refine_iters=1,
+                dropout=0.1,
             )
+
+            # Load weights
+            self.parseq_model.load_state_dict(state_dict, strict=True)
+            self.parseq_model = self.parseq_model.eval().to(self.device)
+
+            # Store tokenizer for decoding
+            self.parseq_tokenizer = tokenizer
+
+            # Image transform: resize to (32, 128) and normalize
+            self.parseq_transform = SceneTextDataModule.get_transform((32, 128))
 
             print(f"    PARSeq loaded successfully on {self.device}")
         except Exception as e:
             print(f"    Failed to load PARSeq: {e}")
+            import traceback
+            traceback.print_exc()
             print("    Falling back to SmolVLM2...")
             self.use_parseq = False
             self.parseq_model = None
             self.parseq_transform = None
+            self.parseq_tokenizer = None
             self.ocr_model = get_model(
                 model_id="basketball-jersey-numbers-ocr/7",
                 api_key=os.getenv("ROBOFLOW_API_KEY")
@@ -348,22 +393,26 @@ class PoseGuidedJerseyDetector:
             # Apply transform and add batch dimension
             img_tensor = self.parseq_transform(pil_img).unsqueeze(0).to(self.device)
 
-            # Run inference
+            # Run inference - PARSeq.forward needs tokenizer and images
             with torch.no_grad():
-                logits = self.parseq_model(img_tensor)
+                logits = self.parseq_model(self.parseq_tokenizer, img_tensor)
+                # logits shape: (batch, seq_len, num_classes)
                 pred = logits.softmax(-1)
-                label, confidence = self.parseq_model.tokenizer.decode(pred)
 
-            result_str = label[0] if label else ""
+                # Decode using tokenizer - returns (labels, confidences)
+                # confidences is a list of tensors (per-character confidence)
+                labels, confidences = self.parseq_tokenizer.decode(pred)
+
+            result_str = labels[0] if labels else ""
 
             # Extract only digits (jersey numbers are 1-2 digits)
             digits = ''.join(c for c in result_str if c.isdigit())
 
             # Validate: jersey numbers should be 1-2 digits
             if digits and len(digits) <= 2:
-                # Get confidence for this prediction
-                conf = confidence[0].item() if confidence else 0
-                if conf > 0.5:  # Only accept high-confidence predictions
+                # Get mean confidence across all characters
+                conf = confidences[0].mean().item() if len(confidences) > 0 and confidences[0].numel() > 0 else 0
+                if conf > 0.3:  # Accept moderate-confidence predictions
                     return digits
 
             return None

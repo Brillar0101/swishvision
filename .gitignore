@@ -40,3 +40,10 @@ logs/
 *.pth
 *.onnx
 models/weights/
+checkpoints/
+
+# Temporary files
+*.tmp
+*.bak
+.cache/
+torch_cache/
