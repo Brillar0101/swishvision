@@ -4,18 +4,28 @@ Uses:
 - RF-DETR for player detection
 - YOLO11 Pose for keypoint detection (shoulders, hips)
 - Torso cropping from pose keypoints for precise OCR region
-- Roboflow's fine-tuned SmolVLM2 OCR model
+- PARSeq for state-of-the-art scene text recognition (jersey numbers)
 - ConsecutiveValueTracker for 3-consecutive validation
 """
 import os
 import cv2
 import numpy as np
 import torch
+from PIL import Image
 from typing import Dict, List, Optional, Tuple
 from collections import defaultdict
 from dotenv import load_dotenv
 import supervision as sv
 from inference import get_model
+
+# PARSeq imports
+try:
+    from strhub.data.module import SceneTextDataModule
+    from strhub.models.utils import load_from_checkpoint, parse_model_args
+    HAS_PARSEQ = True
+except ImportError:
+    HAS_PARSEQ = False
+    print("Warning: PARSeq (strhub) not installed. Install with: pip install strhub")
 
 load_dotenv()
 
@@ -197,7 +207,7 @@ class PoseGuidedJerseyDetector:
     5. Validate with 3-consecutive frame confirmation
     """
 
-    def __init__(self, device: str = None, pose_model: str = "yolov8x-pose-640"):
+    def __init__(self, device: str = None, pose_model: str = "yolov8x-pose-640", use_parseq: bool = True):
         # Device setup
         if device:
             self.device = device
@@ -223,11 +233,20 @@ class PoseGuidedJerseyDetector:
             api_key=os.getenv("ROBOFLOW_API_KEY")
         )
 
-        print("Loading jersey OCR model (SmolVLM2)...")
-        self.ocr_model = get_model(
-            model_id="basketball-jersey-numbers-ocr/7",
-            api_key=os.getenv("ROBOFLOW_API_KEY")
-        )
+        # OCR model selection
+        self.use_parseq = use_parseq and HAS_PARSEQ
+
+        if self.use_parseq:
+            print("Loading PARSeq model for jersey OCR...")
+            self._init_parseq()
+        else:
+            print("Loading jersey OCR model (SmolVLM2 fallback)...")
+            self.ocr_model = get_model(
+                model_id="basketball-jersey-numbers-ocr/7",
+                api_key=os.getenv("ROBOFLOW_API_KEY")
+            )
+            self.parseq_model = None
+            self.parseq_transform = None
 
         # Class IDs for players
         self.PLAYER_CLASS_IDS = [3, 4, 5, 6, 7]
@@ -249,6 +268,34 @@ class PoseGuidedJerseyDetector:
         # Stats
         self.pose_success_count = 0
         self.fallback_count = 0
+
+    def _init_parseq(self):
+        """Initialize PARSeq model for scene text recognition."""
+        try:
+            # Load PARSeq model from torch hub
+            self.parseq_model = torch.hub.load(
+                'baudm/parseq',
+                'parseq',
+                pretrained=True,
+                trust_repo=True
+            ).eval().to(self.device)
+
+            # Get the image transform from the model
+            self.parseq_transform = SceneTextDataModule.get_transform(
+                self.parseq_model.hparams.img_size
+            )
+
+            print(f"    PARSeq loaded successfully on {self.device}")
+        except Exception as e:
+            print(f"    Failed to load PARSeq: {e}")
+            print("    Falling back to SmolVLM2...")
+            self.use_parseq = False
+            self.parseq_model = None
+            self.parseq_transform = None
+            self.ocr_model = get_model(
+                model_id="basketball-jersey-numbers-ocr/7",
+                api_key=os.getenv("ROBOFLOW_API_KEY")
+            )
 
     def get_pose_keypoints(self, player_crop: np.ndarray) -> Optional[np.ndarray]:
         """
@@ -282,6 +329,51 @@ class PoseGuidedJerseyDetector:
             if crop.size == 0 or crop.shape[0] < 10 or crop.shape[1] < 10:
                 return None
 
+            if self.use_parseq and self.parseq_model is not None:
+                return self._run_parseq_ocr(crop)
+            else:
+                return self._run_smolvlm_ocr(crop)
+
+        except Exception as e:
+            print(f"        OCR error: {e}")
+            return None
+
+    def _run_parseq_ocr(self, crop: np.ndarray) -> Optional[str]:
+        """Run PARSeq OCR on a crop."""
+        try:
+            # Convert BGR (OpenCV) to RGB PIL Image
+            crop_rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
+            pil_img = Image.fromarray(crop_rgb)
+
+            # Apply transform and add batch dimension
+            img_tensor = self.parseq_transform(pil_img).unsqueeze(0).to(self.device)
+
+            # Run inference
+            with torch.no_grad():
+                logits = self.parseq_model(img_tensor)
+                pred = logits.softmax(-1)
+                label, confidence = self.parseq_model.tokenizer.decode(pred)
+
+            result_str = label[0] if label else ""
+
+            # Extract only digits (jersey numbers are 1-2 digits)
+            digits = ''.join(c for c in result_str if c.isdigit())
+
+            # Validate: jersey numbers should be 1-2 digits
+            if digits and len(digits) <= 2:
+                # Get confidence for this prediction
+                conf = confidence[0].item() if confidence else 0
+                if conf > 0.5:  # Only accept high-confidence predictions
+                    return digits
+
+            return None
+        except Exception as e:
+            print(f"        PARSeq error: {e}")
+            return None
+
+    def _run_smolvlm_ocr(self, crop: np.ndarray) -> Optional[str]:
+        """Run SmolVLM2 OCR on a crop (fallback)."""
+        try:
             result = self.ocr_model.predict(
                 crop,
                 "Read the jersey number. If unclear or no number visible, respond with 'none'."
@@ -301,7 +393,7 @@ class PoseGuidedJerseyDetector:
 
             return None
         except Exception as e:
-            print(f"        OCR error: {e}")
+            print(f"        SmolVLM2 error: {e}")
             return None
 
     def detect_jersey_numbers(
@@ -429,7 +521,8 @@ class PoseGuidedJerseyDetector:
             "pose_success": self.pose_success_count,
             "fallback": self.fallback_count,
             "confirmed_players": len(self.confirmed_numbers),
-            "unique_jerseys": len(set(self.confirmed_numbers.values()))
+            "unique_jerseys": len(set(self.confirmed_numbers.values())),
+            "ocr_model": "PARSeq" if self.use_parseq else "SmolVLM2"
         }
 
     def clear_cache(self):
@@ -564,6 +657,7 @@ def process_video_jersey_numbers(
     stats = jersey_detector.get_stats()
 
     print(f"\n[4] Results:")
+    print(f"    OCR Model: {stats['ocr_model']}")
     print(f"    Unique players confirmed: {stats['unique_jerseys']}")
     print(f"    Jersey numbers: {list(set(confirmed_numbers.values()))}")
     print(f"    Pose-guided crops: {stats['pose_success']}")
@@ -610,6 +704,7 @@ def process_video_jersey_numbers(
         "video_path": video_path,
         "fps": fps,
         "total_frames": len(frames),
+        "ocr_model": stats['ocr_model'],
         "unique_players": stats['unique_jerseys'],
         "jersey_numbers": list(set(confirmed_numbers.values())),
         "tracker_to_jersey": {str(k): v for k, v in confirmed_numbers.items()},
