@@ -163,6 +163,169 @@ class PlayerTracker:
         self.number_validator = ConsecutiveValueTracker(n_consecutive=3)
         self.team_validator = ConsecutiveValueTracker(n_consecutive=1)
 
+    def _generate_portfolio_frames(
+        self,
+        frames: List[np.ndarray],
+        video_segments: Dict[int, Dict[int, np.ndarray]],
+        tracking_info: Dict[int, Dict],
+        team_classifier: 'TeamClassifier',
+        sample_indices: List[int],
+        output_dir: str,
+        tactical_view: 'TacticalView',
+        smoothed_positions: List[Dict],
+    ) -> List[str]:
+        """
+        Generate portfolio frames showing each pipeline stage.
+
+        Stages:
+        1. Raw frame (original)
+        2. Detection (bounding boxes only)
+        3. Segmentation (masks only)
+        4. Team classification (colored masks by team)
+        5. Jersey detection (with numbers and names)
+        6. Tactical view (2D court only, fullscreen)
+        """
+        from app.ml.tactical_view import draw_court
+
+        portfolio_paths = []
+        height, width = frames[0].shape[:2]
+
+        for sample_idx, frame_idx in enumerate(sample_indices):
+            frame = frames[frame_idx]
+            masks = video_segments.get(frame_idx, {})
+            positions = smoothed_positions[frame_idx] if frame_idx < len(smoothed_positions) else {}
+
+            # Stage 1: Raw frame
+            path = os.path.join(output_dir, f"portfolio_{sample_idx+1:02d}_1_raw.jpg")
+            stage1 = frame.copy()
+            self._add_stage_label(stage1, "Stage 1: Raw Input Frame")
+            cv2.imwrite(path, stage1)
+            portfolio_paths.append(path)
+
+            # Stage 2: Detection (boxes only)
+            path = os.path.join(output_dir, f"portfolio_{sample_idx+1:02d}_2_detection.jpg")
+            stage2 = frame.copy()
+            for obj_id, mask in masks.items():
+                box = mask_to_box(mask)
+                if box:
+                    x1, y1, x2, y2 = int(box[0]), int(box[1]), int(box[2]), int(box[3])
+                    cv2.rectangle(stage2, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                    cv2.putText(stage2, f"ID:{obj_id}", (x1, y1-5),
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+            self._add_stage_label(stage2, "Stage 2: Player Detection (RF-DETR)")
+            cv2.imwrite(path, stage2)
+            portfolio_paths.append(path)
+
+            # Stage 3: Segmentation (masks with unique colors)
+            path = os.path.join(output_dir, f"portfolio_{sample_idx+1:02d}_3_segmentation.jpg")
+            stage3 = frame.copy()
+            colors = self._generate_colors(len(masks))
+            for i, (obj_id, mask) in enumerate(masks.items()):
+                mask_2d = mask.squeeze()
+                color = colors[i % len(colors)]
+                mask_colored = np.zeros_like(stage3)
+                mask_colored[mask_2d] = color
+                stage3 = cv2.addWeighted(stage3, 1.0, mask_colored, 0.5, 0)
+                # Draw contour
+                contours, _ = cv2.findContours(mask_2d.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                cv2.drawContours(stage3, contours, -1, color, 2)
+            self._add_stage_label(stage3, "Stage 3: Player Segmentation (SAM2)")
+            cv2.imwrite(path, stage3)
+            portfolio_paths.append(path)
+
+            # Stage 4: Team classification (colored by team)
+            path = os.path.join(output_dir, f"portfolio_{sample_idx+1:02d}_4_teams.jpg")
+            stage4 = frame.copy()
+            for obj_id, mask in masks.items():
+                info = tracking_info.get(obj_id, {})
+                team_id = info.get('team', 0)
+                color = team_classifier.get_team_color(team_id)
+                mask_2d = mask.squeeze()
+
+                mask_colored = np.zeros_like(stage4)
+                mask_colored[mask_2d] = color
+                stage4 = cv2.addWeighted(stage4, 1.0, mask_colored, 0.4, 0)
+
+                box = mask_to_box(mask)
+                if box:
+                    x1, y1, x2, y2 = int(box[0]), int(box[1]), int(box[2]), int(box[3])
+                    cv2.rectangle(stage4, (x1, y1), (x2, y2), color, 2)
+                    team_name = info.get('team_name', 'Unknown')
+                    cv2.putText(stage4, team_name, (x1, y1-5),
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,255,255), 2)
+            self._add_stage_label(stage4, "Stage 4: Team Classification (SigLIP + K-means)")
+            cv2.imwrite(path, stage4)
+            portfolio_paths.append(path)
+
+            # Stage 5: Jersey detection (numbers and names)
+            path = os.path.join(output_dir, f"portfolio_{sample_idx+1:02d}_5_jersey.jpg")
+            stage5 = frame.copy()
+            for obj_id, mask in masks.items():
+                info = tracking_info.get(obj_id, {})
+                team_id = info.get('team', 0)
+                color = team_classifier.get_team_color(team_id)
+                mask_2d = mask.squeeze()
+
+                mask_colored = np.zeros_like(stage5)
+                mask_colored[mask_2d] = color
+                stage5 = cv2.addWeighted(stage5, 1.0, mask_colored, 0.4, 0)
+
+                box = mask_to_box(mask)
+                if box:
+                    x1, y1, x2, y2 = int(box[0]), int(box[1]), int(box[2]), int(box[3])
+                    cv2.rectangle(stage5, (x1, y1), (x2, y2), color, 2)
+
+                    jersey = info.get('jersey_number')
+                    player_name = info.get('player_name')
+                    if jersey and player_name:
+                        label = f"#{jersey} {player_name}"
+                    elif jersey:
+                        label = f"#{jersey}"
+                    else:
+                        label = f"#{obj_id}"
+
+                    (w, h), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)
+                    cv2.rectangle(stage5, (x1, y1-h-10), (x1+w+6, y1), color, -1)
+                    cv2.putText(stage5, label, (x1+3, y1-5),
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,255,255), 2)
+            self._add_stage_label(stage5, "Stage 5: Jersey Detection (RF-DETR + SmolVLM2 OCR)")
+            cv2.imwrite(path, stage5)
+            portfolio_paths.append(path)
+
+            # Stage 6: Tactical view (full court, not overlay)
+            path = os.path.join(output_dir, f"portfolio_{sample_idx+1:02d}_6_tactical.jpg")
+            if positions and tactical_view._last_transformer is not None:
+                ta = {oid: tracking_info.get(oid, {}).get('team', 0) for oid in positions}
+                tc = {0: team_classifier.get_team_color(0), 1: team_classifier.get_team_color(1), -1: (0, 255, 255)}
+                stage6 = tactical_view.render(positions, (height, width), ta, tc)
+                # Resize to match video dimensions
+                stage6 = cv2.resize(stage6, (width, height))
+            else:
+                # Fallback: draw empty court
+                stage6 = draw_court(width, height)
+                cv2.putText(stage6, "Court keypoints not detected", (width//4, height//2),
+                           cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+            self._add_stage_label(stage6, "Stage 6: Tactical 2D View (Homography Transform)")
+            cv2.imwrite(path, stage6)
+            portfolio_paths.append(path)
+
+        return portfolio_paths
+
+    def _add_stage_label(self, frame: np.ndarray, text: str):
+        """Add stage label to top of frame."""
+        cv2.rectangle(frame, (0, 0), (frame.shape[1], 45), (0, 0, 0), -1)
+        cv2.putText(frame, text, (15, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 255), 2)
+
+    def _generate_colors(self, n: int) -> List[Tuple[int, int, int]]:
+        """Generate n visually distinct colors."""
+        colors = []
+        for i in range(max(n, 1)):
+            hue = int(180 * i / max(n, 1))
+            hsv = np.uint8([[[hue, 255, 255]]])
+            bgr = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)[0][0]
+            colors.append(tuple(int(c) for c in bgr))
+        return colors if colors else [(0, 255, 0)]
+
     def _init_jersey_detection(self):
         """Initialize jersey detection models (lazy loading)."""
         if self._jersey_detector is not None:
@@ -371,7 +534,9 @@ class PlayerTracker:
             )
 
             print("Initializing video tracking...")
-            with torch.inference_mode(), torch.cuda.amp.autocast(dtype=torch.bfloat16, enabled=self.device.type=="cuda"):
+            # Only use autocast on CUDA, not CPU
+            use_autocast = self.device.type == "cuda"
+            with torch.inference_mode(), torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=use_autocast):
                 inference_state = predictor.init_state(video_path=frames_dir)
 
                 tracking_info = {}
@@ -601,6 +766,14 @@ class PlayerTracker:
 
             sample_indices = [int(i * (frame_count - 1) / (num_sample_frames - 1)) for i in range(num_sample_frames)]
 
+            # Build transformer on first frame for tactical view
+            print("Building court transformer...")
+            tactical_view.build_transformer(frames[0])
+            if tactical_view._last_transformer is not None:
+                print("  Court transformer built successfully")
+            else:
+                print("  WARNING: Court transformer failed - tactical view will be empty")
+
             print("Generating sample frames...")
             sample_frames = []
             for idx, frame_idx in enumerate(sample_indices):
@@ -609,24 +782,33 @@ class PlayerTracker:
                 path = os.path.join(output_dir, f"tracking_frame_{idx+1:02d}.jpg")
                 cv2.imwrite(path, annotated)
                 sample_frames.append(path)
-            print(f"  Saved {len(sample_frames)} frames")
+            print(f"  Saved {len(sample_frames)} sample frames")
 
-            print("Generating video...")
-            output_video_path = os.path.join(output_dir, "tracking_output.mp4")
-            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-            out_video = cv2.VideoWriter(output_video_path, fourcc, fps, (width, height))
+            # Generate portfolio stage frames
+            print("Generating portfolio stage frames...")
+            portfolio_frames = self._generate_portfolio_frames(
+                frames, video_segments, tracking_info, team_classifier,
+                sample_indices, output_dir, tactical_view, smoothed_positions
+            )
+            print(f"  Saved {len(portfolio_frames)} portfolio frames")
 
-            for frame_idx in range(frame_count):
-                smoothed = smoothed_positions[frame_idx] if frame_idx < len(smoothed_positions) else None
-                annotated, _ = annotate_frame(frames[frame_idx], frame_idx, smoothed)
-                out_video.write(annotated)
-
-            out_video.release()
-            print(f"Video saved: {output_video_path}")
+            # Video generation disabled for faster testing
+            # print("Generating video...")
+            # output_video_path = os.path.join(output_dir, "tracking_output.mp4")
+            # fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+            # out_video = cv2.VideoWriter(output_video_path, fourcc, fps, (width, height))
+            # for frame_idx in range(frame_count):
+            #     smoothed = smoothed_positions[frame_idx] if frame_idx < len(smoothed_positions) else None
+            #     annotated, _ = annotate_frame(frames[frame_idx], frame_idx, smoothed)
+            #     out_video.write(annotated)
+            # out_video.release()
+            # print(f"Video saved: {output_video_path}")
+            output_video_path = None
 
             return {
                 "video_path": output_video_path,
                 "sample_frames": sample_frames,
+                "portfolio_frames": portfolio_frames,
                 "total_frames": frame_count,
                 "players_tracked": len(tracking_info),
                 "tracking_info": tracking_info,
