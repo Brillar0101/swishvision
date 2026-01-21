@@ -312,6 +312,210 @@ class PlayerTracker:
 
         return portfolio_paths
 
+    def _generate_stage_videos(
+        self,
+        frames: List[np.ndarray],
+        video_segments: Dict[int, Dict[int, np.ndarray]],
+        tracking_info: Dict[int, Dict],
+        team_classifier: 'TeamClassifier',
+        output_dir: str,
+        tactical_view: 'TacticalView',
+        smoothed_positions: List[Dict],
+        fps: float,
+        width: int,
+        height: int,
+    ) -> Dict[str, str]:
+        """
+        Generate video files for each pipeline stage.
+
+        Stages:
+        1. Raw video (original)
+        2. Detection (bounding boxes only)
+        3. Segmentation (masks only)
+        4. Team classification (colored masks by team)
+        5. Jersey detection (with numbers and names)
+        6. Final with tactical view overlay
+        """
+        from app.ml.tactical_view import create_combined_view
+
+        stage_videos = {}
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        frame_count = len(frames)
+
+        # Stage 1: Raw video
+        print("  Stage 1: Raw video...")
+        path = os.path.join(output_dir, "stage_1_raw.mp4")
+        writer = cv2.VideoWriter(path, fourcc, fps, (width, height))
+        for frame in tqdm(frames, desc="Raw", leave=False):
+            out_frame = frame.copy()
+            self._add_stage_label(out_frame, "Stage 1: Raw Input")
+            writer.write(out_frame)
+        writer.release()
+        stage_videos['raw'] = path
+
+        # Stage 2: Detection (boxes only)
+        print("  Stage 2: Detection video...")
+        path = os.path.join(output_dir, "stage_2_detection.mp4")
+        writer = cv2.VideoWriter(path, fourcc, fps, (width, height))
+        for frame_idx, frame in tqdm(enumerate(frames), total=frame_count, desc="Detection", leave=False):
+            out_frame = frame.copy()
+            masks = video_segments.get(frame_idx, {})
+            for obj_id, mask in masks.items():
+                box = mask_to_box(mask)
+                if box:
+                    x1, y1, x2, y2 = int(box[0]), int(box[1]), int(box[2]), int(box[3])
+                    cv2.rectangle(out_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                    cv2.putText(out_frame, f"ID:{obj_id}", (x1, y1-5),
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+            self._add_stage_label(out_frame, "Stage 2: Player Detection (RF-DETR)")
+            writer.write(out_frame)
+        writer.release()
+        stage_videos['detection'] = path
+
+        # Stage 3: Segmentation (masks with unique colors)
+        print("  Stage 3: Segmentation video...")
+        path = os.path.join(output_dir, "stage_3_segmentation.mp4")
+        writer = cv2.VideoWriter(path, fourcc, fps, (width, height))
+        all_obj_ids = sorted(set(oid for masks in video_segments.values() for oid in masks.keys()))
+        colors = self._generate_colors(len(all_obj_ids))
+        color_map = {oid: colors[i % len(colors)] for i, oid in enumerate(all_obj_ids)}
+        for frame_idx, frame in tqdm(enumerate(frames), total=frame_count, desc="Segmentation", leave=False):
+            out_frame = frame.copy()
+            masks = video_segments.get(frame_idx, {})
+            for obj_id, mask in masks.items():
+                mask_2d = mask.squeeze()
+                color = color_map.get(obj_id, (0, 255, 0))
+                mask_colored = np.zeros_like(out_frame)
+                mask_colored[mask_2d] = color
+                out_frame = cv2.addWeighted(out_frame, 1.0, mask_colored, 0.5, 0)
+                contours, _ = cv2.findContours(mask_2d.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                cv2.drawContours(out_frame, contours, -1, color, 2)
+            self._add_stage_label(out_frame, "Stage 3: Player Segmentation (SAM2)")
+            writer.write(out_frame)
+        writer.release()
+        stage_videos['segmentation'] = path
+
+        # Stage 4: Team classification (colored by team)
+        print("  Stage 4: Team classification video...")
+        path = os.path.join(output_dir, "stage_4_teams.mp4")
+        writer = cv2.VideoWriter(path, fourcc, fps, (width, height))
+        for frame_idx, frame in tqdm(enumerate(frames), total=frame_count, desc="Teams", leave=False):
+            out_frame = frame.copy()
+            masks = video_segments.get(frame_idx, {})
+            for obj_id, mask in masks.items():
+                info = tracking_info.get(obj_id, {})
+                team_id = info.get('team', 0)
+                color = team_classifier.get_team_color(team_id)
+                mask_2d = mask.squeeze()
+
+                mask_colored = np.zeros_like(out_frame)
+                mask_colored[mask_2d] = color
+                out_frame = cv2.addWeighted(out_frame, 1.0, mask_colored, 0.4, 0)
+
+                box = mask_to_box(mask)
+                if box:
+                    x1, y1, x2, y2 = int(box[0]), int(box[1]), int(box[2]), int(box[3])
+                    cv2.rectangle(out_frame, (x1, y1), (x2, y2), color, 2)
+                    team_name = info.get('team_name', 'Unknown')
+                    cv2.putText(out_frame, team_name, (x1, y1-5),
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+            self._add_stage_label(out_frame, "Stage 4: Team Classification (SigLIP + K-means)")
+            writer.write(out_frame)
+        writer.release()
+        stage_videos['teams'] = path
+
+        # Stage 5: Jersey detection (numbers and names)
+        print("  Stage 5: Jersey detection video...")
+        path = os.path.join(output_dir, "stage_5_jersey.mp4")
+        writer = cv2.VideoWriter(path, fourcc, fps, (width, height))
+        for frame_idx, frame in tqdm(enumerate(frames), total=frame_count, desc="Jersey", leave=False):
+            out_frame = frame.copy()
+            masks = video_segments.get(frame_idx, {})
+            for obj_id, mask in masks.items():
+                info = tracking_info.get(obj_id, {})
+                team_id = info.get('team', 0)
+                color = team_classifier.get_team_color(team_id)
+                mask_2d = mask.squeeze()
+
+                mask_colored = np.zeros_like(out_frame)
+                mask_colored[mask_2d] = color
+                out_frame = cv2.addWeighted(out_frame, 1.0, mask_colored, 0.4, 0)
+
+                box = mask_to_box(mask)
+                if box:
+                    x1, y1, x2, y2 = int(box[0]), int(box[1]), int(box[2]), int(box[3])
+                    cv2.rectangle(out_frame, (x1, y1), (x2, y2), color, 2)
+
+                    jersey = info.get('jersey_number')
+                    player_name = info.get('player_name')
+                    if jersey and player_name:
+                        label = f"#{jersey} {player_name}"
+                    elif jersey:
+                        label = f"#{jersey}"
+                    else:
+                        label = f"#{obj_id}"
+
+                    (w, h), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)
+                    cv2.rectangle(out_frame, (x1, y1-h-10), (x1+w+6, y1), color, -1)
+                    cv2.putText(out_frame, label, (x1+3, y1-5),
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+            self._add_stage_label(out_frame, "Stage 5: Jersey Detection (RF-DETR + SmolVLM2 OCR)")
+            writer.write(out_frame)
+        writer.release()
+        stage_videos['jersey'] = path
+
+        # Stage 6: Final with tactical view overlay
+        print("  Stage 6: Final video with tactical view...")
+        path = os.path.join(output_dir, "stage_6_final.mp4")
+        writer = cv2.VideoWriter(path, fourcc, fps, (width, height))
+        for frame_idx, frame in tqdm(enumerate(frames), total=frame_count, desc="Final", leave=False):
+            out_frame = frame.copy()
+            masks = video_segments.get(frame_idx, {})
+            positions = smoothed_positions[frame_idx] if frame_idx < len(smoothed_positions) else {}
+
+            for obj_id, mask in masks.items():
+                info = tracking_info.get(obj_id, {})
+                team_id = info.get('team', 0)
+                color = team_classifier.get_team_color(team_id)
+                mask_2d = mask.squeeze()
+
+                mask_colored = np.zeros_like(out_frame)
+                mask_colored[mask_2d] = color
+                out_frame = cv2.addWeighted(out_frame, 1.0, mask_colored, 0.4, 0)
+
+                box = mask_to_box(mask)
+                if box:
+                    x1, y1, x2, y2 = int(box[0]), int(box[1]), int(box[2]), int(box[3])
+                    cv2.rectangle(out_frame, (x1, y1), (x2, y2), color, 2)
+
+                    jersey = info.get('jersey_number')
+                    player_name = info.get('player_name')
+                    if jersey and player_name:
+                        label = f"#{jersey} {player_name}"
+                    elif jersey:
+                        label = f"#{jersey}"
+                    else:
+                        label = f"#{obj_id}"
+
+                    (w, h), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)
+                    cv2.rectangle(out_frame, (x1, y1-h-10), (x1+w+6, y1), color, -1)
+                    cv2.putText(out_frame, label, (x1+3, y1-5),
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+
+            # Add tactical view overlay
+            if positions and tactical_view._last_transformer is not None:
+                ta = {oid: tracking_info.get(oid, {}).get('team', 0) for oid in positions}
+                tc = {0: team_classifier.get_team_color(0), 1: team_classifier.get_team_color(1), -1: (0, 255, 255)}
+                tactical = tactical_view.render(positions, (height, width), ta, tc)
+                out_frame = create_combined_view(out_frame, tactical)
+
+            self._add_stage_label(out_frame, "Stage 6: Final Output with Tactical View")
+            writer.write(out_frame)
+        writer.release()
+        stage_videos['final'] = path
+
+        return stage_videos
+
     def _add_stage_label(self, frame: np.ndarray, text: str):
         """Add stage label to top of frame."""
         cv2.rectangle(frame, (0, 0), (frame.shape[1], 45), (0, 0, 0), -1)
@@ -460,7 +664,7 @@ class PlayerTracker:
         iou_threshold: float = 0.3,
         max_total_objects: int = 15,
         num_sample_frames: int = 3,
-        max_seconds: float = 10.0,
+        max_seconds: float = None,
         team_names: Tuple[str, str] = ("Indiana Pacers", "Oklahoma City Thunder"),
         jersey_ocr_interval: int = 5,
         smooth_tactical: bool = True,
@@ -489,9 +693,10 @@ class PlayerTracker:
                 frames.append(frame)
             cap.release()
 
-            max_frames = int(fps * max_seconds)
-            if len(frames) > max_frames:
-                frames = frames[:max_frames]
+            if max_seconds is not None:
+                max_frames = int(fps * max_seconds)
+                if len(frames) > max_frames:
+                    frames = frames[:max_frames]
 
             frame_count = len(frames)
             print(f"Loaded {frame_count} frames ({frame_count/fps:.1f}s)")
@@ -796,21 +1001,18 @@ class PlayerTracker:
             )
             print(f"  Saved {len(portfolio_frames)} portfolio frames")
 
-            # Video generation disabled for faster testing
-            # print("Generating video...")
-            # output_video_path = os.path.join(output_dir, "tracking_output.mp4")
-            # fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-            # out_video = cv2.VideoWriter(output_video_path, fourcc, fps, (width, height))
-            # for frame_idx in range(frame_count):
-            #     smoothed = smoothed_positions[frame_idx] if frame_idx < len(smoothed_positions) else None
-            #     annotated, _ = annotate_frame(frames[frame_idx], frame_idx, smoothed)
-            #     out_video.write(annotated)
-            # out_video.release()
-            # print(f"Video saved: {output_video_path}")
-            output_video_path = None
+            # Generate video outputs for each pipeline stage
+            print("Generating stage videos...")
+            stage_videos = self._generate_stage_videos(
+                frames, video_segments, tracking_info, team_classifier,
+                output_dir, tactical_view, smoothed_positions, fps, width, height
+            )
+            print(f"  Generated {len(stage_videos)} stage videos")
+            output_video_path = stage_videos.get('final')
 
             return {
                 "video_path": output_video_path,
+                "stage_videos": stage_videos,
                 "sample_frames": sample_frames,
                 "portfolio_frames": portfolio_frames,
                 "total_frames": frame_count,
