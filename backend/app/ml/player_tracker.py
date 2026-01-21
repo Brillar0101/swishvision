@@ -681,7 +681,13 @@ class PlayerTracker:
         try:
             print("Extracting frames...")
             cap = cv2.VideoCapture(video_path)
+            if not cap.isOpened():
+                raise ValueError(f"Could not open video file: {video_path}")
+
             fps = cap.get(cv2.CAP_PROP_FPS)
+            if fps == 0:
+                fps = 30.0  # Default fallback
+                print(f"  Warning: Could not read FPS, defaulting to {fps}")
             width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
             height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
