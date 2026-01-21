@@ -16,8 +16,10 @@ load_dotenv(os.path.join(os.path.dirname(__file__), 'backend', '.env'))
 from app.ml.player_tracker import PlayerTracker
 
 def main():
-    video_path = "/Users/barakaeli/Desktop/Github Projects/swishvision/test_videos/test_game.mp4"
-    output_dir = "/Users/barakaeli/Desktop/Github Projects/swishvision/outputs/jersey_test"
+    # Use relative paths that work on any machine
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    video_path = os.path.join(script_dir, "test_videos", "test_game.mp4")
+    output_dir = os.path.join(script_dir, "outputs", "jersey_test")
 
     print("=" * 60)
     print("SwishVision - Jersey Detection Test")
