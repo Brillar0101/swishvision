@@ -540,8 +540,10 @@ class PlayerTracker:
 
             print("Initializing video tracking...")
             # Only use autocast on CUDA, not CPU
+            # Use float16 instead of bfloat16 for better compatibility with SAM2
             use_autocast = self.device.type == "cuda"
-            with torch.inference_mode(), torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=use_autocast):
+            autocast_dtype = torch.float16 if use_autocast else torch.float32
+            with torch.inference_mode(), torch.amp.autocast(device_type="cuda", dtype=autocast_dtype, enabled=use_autocast):
                 inference_state = predictor.init_state(video_path=frames_dir)
 
                 tracking_info = {}
