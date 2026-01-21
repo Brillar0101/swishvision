@@ -896,8 +896,7 @@ class PlayerTracker:
                 print("Training team classifier... [CACHED]")
                 tc_data = checkpoint.load_data('team_classifier')
                 if tc_data:
-                    team_classifier.cluster_centers = tc_data.get('cluster_centers')
-                    team_classifier.kmeans = tc_data.get('kmeans')
+                    team_classifier._kmeans = tc_data.get('_kmeans')
                     team_classifier.is_fitted = tc_data.get('is_fitted', False)
                     print(f"  Loaded team classifier from cache (fitted={team_classifier.is_fitted})")
             else:
@@ -905,8 +904,7 @@ class PlayerTracker:
                 if len(all_crops) >= 2:
                     team_classifier.fit(all_crops)
                 checkpoint.save_data('team_classifier', {
-                    'cluster_centers': team_classifier.cluster_centers,
-                    'kmeans': team_classifier.kmeans,
+                    '_kmeans': team_classifier._kmeans,
                     'is_fitted': team_classifier.is_fitted,
                 })
                 checkpoint.mark_stage_complete('team_classifier_trained')
