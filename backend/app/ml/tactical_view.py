@@ -1,55 +1,23 @@
 """
 Tactical View Module for SwishVision
-Standalone implementation without external sports library dependency.
+Uses roboflow sports library for basketball court configuration.
 """
 import cv2
 import numpy as np
 import supervision as sv
 from typing import Dict, Tuple, Optional, List
 
+# Try to import from sports library (roboflow)
+try:
+    from sports.basketball import CourtConfiguration, League, MeasurementUnit, draw_court as sports_draw_court
+    SPORTS_AVAILABLE = True
+except ImportError:
+    SPORTS_AVAILABLE = False
+    print("Warning: sports library not available. Install with: pip install git+https://github.com/roboflow/sports.git@feat/basketball")
 
 # NBA Court dimensions in feet
 NBA_COURT_LENGTH = 94.0
 NBA_COURT_WIDTH = 50.0
-
-# Court keypoint positions (in feet, origin at center court)
-# These correspond to the basketball-court-detection-2/14 model outputs (32 keypoints)
-# Order matches the model's keypoint indices
-NBA_COURT_VERTICES = [
-    (0, 0),        # 0: Center court
-    (-47, 25),     # 1: Top-left corner
-    (-47, -25),    # 2: Bottom-left corner
-    (47, 25),      # 3: Top-right corner
-    (47, -25),     # 4: Bottom-right corner
-    (-47, 8),      # 5: Left paint top
-    (-47, -8),     # 6: Left paint bottom
-    (-28, 8),      # 7: Left FT line top
-    (-28, -8),     # 8: Left FT line bottom
-    (-28, 0),      # 9: Left FT center
-    (47, 8),       # 10: Right paint top
-    (47, -8),      # 11: Right paint bottom
-    (28, 8),       # 12: Right FT line top
-    (28, -8),      # 13: Right FT line bottom
-    (28, 0),       # 14: Right FT center
-    (-22, 25),     # 15: Left 3pt corner top
-    (-22, -25),    # 16: Left 3pt corner bottom
-    (22, 25),      # 17: Right 3pt corner top
-    (22, -25),     # 18: Right 3pt corner bottom
-    (-23.75, 8),   # 19: Left 3pt arc top
-    (-23.75, -8),  # 20: Left 3pt arc bottom
-    (23.75, 8),    # 21: Right 3pt arc top
-    (23.75, -8),   # 22: Right 3pt arc bottom
-    (0, 25),       # 23: Half court top
-    (0, -25),      # 24: Half court bottom
-    (0, 6),        # 25: Center circle top
-    (0, -6),       # 26: Center circle bottom
-    (-47, 0),      # 27: Left baseline center
-    (47, 0),       # 28: Right baseline center
-    (-28, 6),      # 29: Left FT circle top
-    (-28, -6),     # 30: Left FT circle bottom
-    (28, 6),       # 31: Right FT circle top
-    (28, -6),      # 32: Right FT circle bottom
-]
 
 
 class ViewTransformer:
@@ -157,8 +125,55 @@ class TacticalView:
         self._last_keypoints_xy = None
         self._last_keypoints_conf = None
 
-        # Court vertices for homography
-        self.vertices = np.array(NBA_COURT_VERTICES, dtype=np.float32)
+        # Court vertices for homography - use sports library if available
+        if SPORTS_AVAILABLE:
+            config = CourtConfiguration(league=League.NBA, measurement_unit=MeasurementUnit.FEET)
+            self.vertices = np.array(config.vertices, dtype=np.float32)
+            print(f"  Loaded {len(self.vertices)} court vertices from sports library")
+        else:
+            # Fallback vertices (may not match model exactly)
+            print("  WARNING: Using fallback court vertices - install sports library for accuracy")
+            self.vertices = self._get_fallback_vertices()
+
+    def _get_fallback_vertices(self) -> np.ndarray:
+        """Fallback court vertices when sports library is not available."""
+        # These are approximate NBA court landmark positions in feet
+        # Origin at center court, x along length, y along width
+        return np.array([
+            [0, 0],       # Center court
+            [-47, 25],    # Corner
+            [-47, -25],
+            [47, 25],
+            [47, -25],
+            [-47, 8],     # Paint corners
+            [-47, -8],
+            [-28, 8],
+            [-28, -8],
+            [-28, 0],
+            [47, 8],
+            [47, -8],
+            [28, 8],
+            [28, -8],
+            [28, 0],
+            [-22, 25],    # 3-point line
+            [-22, -25],
+            [22, 25],
+            [22, -25],
+            [-23.75, 8],
+            [-23.75, -8],
+            [23.75, 8],
+            [23.75, -8],
+            [0, 25],      # Half court
+            [0, -25],
+            [0, 6],
+            [0, -6],
+            [-47, 0],     # Baseline center
+            [47, 0],
+            [-28, 6],     # Free throw
+            [-28, -6],
+            [28, 6],
+            [28, -6],
+        ], dtype=np.float32)
 
     def _load_model(self):
         """Lazy load keypoint detection model."""
