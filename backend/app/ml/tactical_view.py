@@ -251,18 +251,16 @@ class TacticalView:
         frame_shape: Tuple[int, int],
         team_assignments: Dict[int, int] = None,
         team_colors: Dict[int, Tuple[int, int, int]] = None,
-        jersey_numbers: Dict[int, str] = None,
     ) -> np.ndarray:
         """
         Render tactical court view with numbered circles for players.
-        
+
         Args:
             player_positions: Dict mapping obj_id -> (x, y) pixel coordinates
             frame_shape: (height, width) of the video frame
             team_assignments: Dict mapping obj_id -> team_id (0, 1, or -1 for ref)
             team_colors: Dict mapping team_id -> BGR color tuple
-            jersey_numbers: Dict mapping obj_id -> jersey number string
-            
+
         Returns:
             Blue tactical court image with numbered player circles
         """
@@ -272,67 +270,64 @@ class TacticalView:
                 1: (0, 0, 255),    # Red
                 -1: (0, 255, 255), # Yellow (referees)
             }
-        
-        if jersey_numbers is None:
-            jersey_numbers = {}
-        
+
         # Create blue court
         court_blue = self.get_court_image()
-        
+
         if self._last_transformer is None or len(player_positions) == 0:
             return court_blue
-        
+
         # Convert positions dict to array
         obj_ids = list(player_positions.keys())
         positions = np.array([player_positions[oid] for oid in obj_ids], dtype=np.float32)
-        
+
         # Transform to court coordinates
         court_xy = self._last_transformer.transform_points(points=positions)
         if court_xy is None:
             return court_blue
-        
+
         # Court dimensions for scaling
         court_h, court_w = court_blue.shape[:2]
-        
+
         # NBA court is 94 x 50 feet
         scale_x = court_w / 94.0
         scale_y = court_h / 50.0
-        
+
         # Draw each player as a numbered circle
         for i, obj_id in enumerate(obj_ids):
             # Get court position (in feet, centered at 0,0)
             cx_feet, cy_feet = court_xy[i]
-            
+
             # Convert to pixel coordinates (court image has origin at top-left)
             # Court center is at (47, 25) feet
             px = int((cx_feet + 47) * scale_x)
             py = int((25 - cy_feet) * scale_y)  # Flip Y
-            
+
             # Skip if outside court bounds
             if px < 0 or px >= court_w or py < 0 or py >= court_h:
                 continue
-            
+
             # Get team color
             team_id = team_assignments.get(obj_id, 0) if team_assignments else 0
             color = team_colors.get(team_id, (128, 128, 128))
-            
+
             # Draw filled circle
             radius = 18
             cv2.circle(court_blue, (px, py), radius, color, -1)
             cv2.circle(court_blue, (px, py), radius, (255, 255, 255), 2)  # White border
-            
-            # Draw number inside circle
-            number = jersey_numbers.get(obj_id, str(obj_id))
+
+            # Draw player ID inside circle
+            number = str(obj_id)
             font = cv2.FONT_HERSHEY_SIMPLEX
-            font_scale = 0.5 if len(str(number)) <= 2 else 0.4
+            font_scale = 0.5 if len(number) <= 2 else 0.4
             thickness = 2
-            
-            (text_w, text_h), _ = cv2.getTextSize(str(number), font, font_scale, thickness)
+
+            (text_w, text_h), _ = cv2.getTextSize(number, font, font_scale, thickness)
             text_x = px - text_w // 2
             text_y = py + text_h // 2
-            
-            cv2.putText(court_blue, str(number), (text_x, text_y), font, font_scale, (255, 255, 255), thickness)
-        
+
+            cv2.putText(court_blue, number, (text_x, text_y), font, font_scale, (255, 255, 255), thickness)
+
         return court_blue
     
     def get_court_image(self) -> np.ndarray:

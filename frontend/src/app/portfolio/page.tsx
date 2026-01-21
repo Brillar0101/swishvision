@@ -50,7 +50,6 @@ export default function Portfolio() {
     models: [
       { name: 'YOLOv8', desc: 'Player detection' },
       { name: 'SigLIP', desc: 'Team classification embeddings' },
-      { name: 'SmolVLM2', desc: 'Jersey number OCR' },
       { name: 'RF-DETR', desc: 'Object detection' },
     ]
   }
@@ -84,7 +83,7 @@ export default function Portfolio() {
 
   const stats = [
     { value: '4,800+', label: 'Lines of Code' },
-    { value: '6', label: 'ML Models' },
+    { value: '5', label: 'ML Models' },
     { value: '6', label: 'API Endpoints' },
     { value: '21', label: 'Python Modules' },
   ]
@@ -92,13 +91,8 @@ export default function Portfolio() {
   const challenges = [
     {
       title: 'Multi-Model Pipeline Orchestration',
-      problem: 'Coordinating 6 different ML models (YOLOv8, SAM2, SigLIP, SmolVLM2, RF-DETR, Court Detection) with varying inference times and dependencies.',
+      problem: 'Coordinating multiple ML models (YOLOv8, SAM2, SigLIP, RF-DETR, Court Detection) with varying inference times and dependencies.',
       solution: 'Implemented a staged processing pipeline with progress tracking, where each model\'s output feeds into the next while maintaining frame-level synchronization.'
-    },
-    {
-      title: 'Jersey Number Validation',
-      problem: 'OCR models often produce noisy or incorrect readings on fast-moving players with partially visible numbers.',
-      solution: 'Developed a 3-consecutive-frame validation system that only confirms a jersey number when identical values are detected across three sequential frames.'
     },
     {
       title: 'Real-time Homography Calculation',
@@ -217,7 +211,7 @@ export default function Portfolio() {
               <p className="text-white/60 leading-relaxed">
                 SwishVision automates basketball game analysis using a sophisticated ML pipeline.
                 Upload game footage and receive instant player detection, automatic team classification
-                based on jersey colors, continuous player tracking across frames, jersey number recognition,
+                based on jersey colors, continuous player tracking across frames,
                 and tactical bird's-eye court visualizations—all powered by state-of-the-art models like
                 SAM2, YOLOv8, and SigLIP.
               </p>
@@ -405,7 +399,6 @@ export default function Portfolio() {
                   'Player Detection',
                   'SAM2 Tracking',
                   'Team Classification',
-                  'Jersey OCR',
                   'Tactical View',
                   'Output Video'
                 ].map((step, i) => (
@@ -413,7 +406,7 @@ export default function Portfolio() {
                     <span className="px-3 py-1.5 rounded-lg bg-orange-500/10 text-orange-400 whitespace-nowrap">
                       {step}
                     </span>
-                    {i < 7 && <ChevronRight className="w-4 h-4 text-white/20" />}
+                    {i < 6 && <ChevronRight className="w-4 h-4 text-white/20" />}
                   </div>
                 ))}
               </div>

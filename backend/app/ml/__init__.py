@@ -2,17 +2,23 @@
 Swish Vision ML Module
 """
 from .player_detector import PlayerDetector
-from .player_tracker import PlayerTracker
+from .player_tracker import PlayerTracker, ConsecutiveValueTracker
 from .court_detector import CourtDetector
 from .team_classifier import TeamClassifier
 from .tactical_view import TacticalView
-from .jersey_number_detector import JerseyNumberDetector
+from .team_rosters import TEAM_ROSTERS, TEAM_COLORS, get_player_name
+from .path_smoothing import clean_paths, smooth_tactical_positions
 
 __all__ = [
     "PlayerDetector",
-    "PlayerTracker", 
+    "PlayerTracker",
+    "ConsecutiveValueTracker",
     "CourtDetector",
     "TeamClassifier",
     "TacticalView",
-    "JerseyNumberDetector",
+    "TEAM_ROSTERS",
+    "TEAM_COLORS",
+    "get_player_name",
+    "clean_paths",
+    "smooth_tactical_positions",
 ]
