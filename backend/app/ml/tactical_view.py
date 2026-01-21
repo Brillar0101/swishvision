@@ -13,15 +13,42 @@ NBA_COURT_LENGTH = 94.0
 NBA_COURT_WIDTH = 50.0
 
 # Court keypoint positions (in feet, origin at center court)
-# These correspond to the basketball-court-detection-2/14 model outputs
+# These correspond to the basketball-court-detection-2/14 model outputs (32 keypoints)
+# Order matches the model's keypoint indices
 NBA_COURT_VERTICES = [
-    (-47, -25), (-47, 25), (47, -25), (47, 25),  # Corners
-    (-47, -8), (-47, 8), (47, -8), (47, 8),       # Free throw lane corners
-    (-28, -8), (-28, 8), (28, -8), (28, 8),       # Free throw line ends
-    (-28, 0), (28, 0),                            # Free throw circles center
-    (0, -25), (0, 25), (0, 0),                    # Half court
-    (-41, -8), (-41, 8), (41, -8), (41, 8),       # Backboard area
-    (-47, -3), (-47, 3), (47, -3), (47, 3),       # Restricted area
+    (0, 0),        # 0: Center court
+    (-47, 25),     # 1: Top-left corner
+    (-47, -25),    # 2: Bottom-left corner
+    (47, 25),      # 3: Top-right corner
+    (47, -25),     # 4: Bottom-right corner
+    (-47, 8),      # 5: Left paint top
+    (-47, -8),     # 6: Left paint bottom
+    (-28, 8),      # 7: Left FT line top
+    (-28, -8),     # 8: Left FT line bottom
+    (-28, 0),      # 9: Left FT center
+    (47, 8),       # 10: Right paint top
+    (47, -8),      # 11: Right paint bottom
+    (28, 8),       # 12: Right FT line top
+    (28, -8),      # 13: Right FT line bottom
+    (28, 0),       # 14: Right FT center
+    (-22, 25),     # 15: Left 3pt corner top
+    (-22, -25),    # 16: Left 3pt corner bottom
+    (22, 25),      # 17: Right 3pt corner top
+    (22, -25),     # 18: Right 3pt corner bottom
+    (-23.75, 8),   # 19: Left 3pt arc top
+    (-23.75, -8),  # 20: Left 3pt arc bottom
+    (23.75, 8),    # 21: Right 3pt arc top
+    (23.75, -8),   # 22: Right 3pt arc bottom
+    (0, 25),       # 23: Half court top
+    (0, -25),      # 24: Half court bottom
+    (0, 6),        # 25: Center circle top
+    (0, -6),       # 26: Center circle bottom
+    (-47, 0),      # 27: Left baseline center
+    (47, 0),       # 28: Right baseline center
+    (-28, 6),      # 29: Left FT circle top
+    (-28, -6),     # 30: Left FT circle bottom
+    (28, 6),       # 31: Right FT circle top
+    (28, -6),      # 32: Right FT circle bottom
 ]
 
 
@@ -169,29 +196,65 @@ class TacticalView:
         """Build homography transformer for a frame."""
         self._load_model()
         if self._keypoint_model is None:
+            print("  WARNING: Court keypoint model not loaded")
             return self._last_transformer
 
         try:
             result = self._keypoint_model.infer(frame, confidence=self.keypoint_confidence)[0]
-            key_points = sv.KeyPoints.from_inference(result)
 
-            self._last_keypoints_xy = key_points.xy[0]
-            self._last_keypoints_conf = key_points.confidence[0]
+            # Try to extract keypoints from the inference result
+            keypoints_xy = []
+            keypoints_conf = []
+
+            # Handle different result formats
+            if hasattr(result, 'predictions') and result.predictions:
+                pred = result.predictions[0]
+                if hasattr(pred, 'keypoints') and pred.keypoints:
+                    for kp in pred.keypoints:
+                        keypoints_xy.append([kp.x, kp.y])
+                        keypoints_conf.append(kp.confidence)
+
+            if not keypoints_xy:
+                # Try supervision KeyPoints format
+                try:
+                    key_points = sv.KeyPoints.from_inference(result)
+                    if key_points.xy is not None and len(key_points.xy) > 0:
+                        keypoints_xy = key_points.xy[0].tolist()
+                        keypoints_conf = key_points.confidence[0].tolist()
+                except Exception:
+                    pass
+
+            if not keypoints_xy:
+                print(f"  No keypoints detected in frame")
+                return self._last_transformer
+
+            self._last_keypoints_xy = np.array(keypoints_xy)
+            self._last_keypoints_conf = np.array(keypoints_conf)
 
             mask = self._last_keypoints_conf > self.anchor_confidence
+            num_valid = int(np.sum(mask))
+            print(f"  Court keypoints: {num_valid}/{len(keypoints_xy)} above confidence threshold")
 
-            if np.sum(mask) >= 4:
+            if num_valid >= 4:
                 # Use only high-confidence keypoints
+                # Make sure vertices array is large enough
+                if len(self.vertices) < len(mask):
+                    print(f"  WARNING: More keypoints ({len(mask)}) than vertices ({len(self.vertices)})")
+                    mask = mask[:len(self.vertices)]
+
                 court_landmarks = self.vertices[mask]
-                frame_landmarks = key_points[:, mask].xy[0]
+                frame_landmarks = self._last_keypoints_xy[mask]
 
                 self._last_transformer = ViewTransformer(
                     source=frame_landmarks,
                     target=court_landmarks
                 )
+                print(f"  Homography transformer built successfully with {num_valid} points")
                 return self._last_transformer
+            else:
+                print(f"  Not enough keypoints for homography (need 4, got {num_valid})")
         except Exception as e:
-            pass
+            print(f"  Error building transformer: {e}")
 
         return self._last_transformer
 
