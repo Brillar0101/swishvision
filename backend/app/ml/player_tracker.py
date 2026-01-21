@@ -702,7 +702,7 @@ class PlayerTracker:
             def annotate_frame(frame, frame_idx, smoothed_positions=None):
                 annotated = frame.copy()
                 player_positions = {}
-                tactical_view.build_transformer(frame)
+                # NOTE: Don't call build_transformer here - it's already built once before this loop
 
                 if frame_idx in video_segments:
                     for obj_id, mask in video_segments[frame_idx].items():
