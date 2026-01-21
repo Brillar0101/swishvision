@@ -10,8 +10,8 @@ import numpy as np
 import torch
 import supervision as sv
 from typing import Dict, List, Tuple, Optional
-import tempfile
-import shutil
+import pickle
+import json
 from tqdm import tqdm
 
 from sam2.build_sam import build_sam2_video_predictor
@@ -88,6 +88,107 @@ def filter_segments_by_distance(mask: np.ndarray, relative_distance: float = 0.0
             result[segment_mask] = 1
 
     return result.reshape(mask.shape).astype(bool)
+
+
+class PipelineCheckpoint:
+    """
+    Manages checkpointing for the video processing pipeline.
+    Saves intermediate results to disk so processing can resume after failures.
+    """
+
+    STAGES = [
+        'frames_extracted',
+        'crops_collected',
+        'team_classifier_trained',
+        'court_detected',
+        'sam2_segmented',
+        'teams_assigned',
+        'jersey_detected',
+        'positions_smoothed',
+        'videos_generated',
+    ]
+
+    def __init__(self, checkpoint_dir: str):
+        self.checkpoint_dir = checkpoint_dir
+        os.makedirs(checkpoint_dir, exist_ok=True)
+        self._status_file = os.path.join(checkpoint_dir, 'pipeline_status.json')
+        self._load_status()
+
+    def _load_status(self):
+        """Load existing status or create new."""
+        if os.path.exists(self._status_file):
+            with open(self._status_file, 'r') as f:
+                self._status = json.load(f)
+        else:
+            self._status = {'completed_stages': [], 'metadata': {}}
+
+    def _save_status(self):
+        """Save status to disk."""
+        with open(self._status_file, 'w') as f:
+            json.dump(self._status, f, indent=2)
+
+    def is_stage_complete(self, stage: str) -> bool:
+        """Check if a stage has been completed."""
+        return stage in self._status['completed_stages']
+
+    def mark_stage_complete(self, stage: str):
+        """Mark a stage as completed."""
+        if stage not in self._status['completed_stages']:
+            self._status['completed_stages'].append(stage)
+            self._save_status()
+            print(f"  [Checkpoint] Stage '{stage}' saved")
+
+    def save_metadata(self, key: str, value):
+        """Save metadata (fps, dimensions, etc.)."""
+        self._status['metadata'][key] = value
+        self._save_status()
+
+    def get_metadata(self, key: str, default=None):
+        """Get saved metadata."""
+        return self._status['metadata'].get(key, default)
+
+    def save_data(self, name: str, data):
+        """Save data to checkpoint file using pickle."""
+        path = os.path.join(self.checkpoint_dir, f'{name}.pkl')
+        with open(path, 'wb') as f:
+            pickle.dump(data, f)
+
+    def load_data(self, name: str, default=None):
+        """Load data from checkpoint file."""
+        path = os.path.join(self.checkpoint_dir, f'{name}.pkl')
+        if os.path.exists(path):
+            with open(path, 'rb') as f:
+                return pickle.load(f)
+        return default
+
+    def save_frames_dir(self, frames_dir: str):
+        """Save reference to frames directory."""
+        self._status['metadata']['frames_dir'] = frames_dir
+        self._save_status()
+
+    def get_frames_dir(self) -> Optional[str]:
+        """Get frames directory if it exists."""
+        frames_dir = self._status['metadata'].get('frames_dir')
+        if frames_dir and os.path.exists(frames_dir):
+            return frames_dir
+        return None
+
+    def clear(self):
+        """Clear all checkpoints to start fresh."""
+        import glob
+        for f in glob.glob(os.path.join(self.checkpoint_dir, '*.pkl')):
+            os.remove(f)
+        if os.path.exists(self._status_file):
+            os.remove(self._status_file)
+        self._status = {'completed_stages': [], 'metadata': {}}
+        print("  [Checkpoint] Cleared all checkpoints")
+
+    def get_progress_summary(self) -> str:
+        """Get a summary of completed stages."""
+        completed = self._status['completed_stages']
+        if not completed:
+            return "No stages completed"
+        return f"Completed: {', '.join(completed)}"
 
 
 class ConsecutiveValueTracker:
@@ -668,10 +769,45 @@ class PlayerTracker:
         team_names: Tuple[str, str] = ("Indiana Pacers", "Oklahoma City Thunder"),
         jersey_ocr_interval: int = 5,
         smooth_tactical: bool = True,
+        resume: bool = True,
+        clear_checkpoints: bool = False,
     ) -> Dict:
+        """
+        Process video with player tracking, team classification, and jersey detection.
+
+        Args:
+            video_path: Path to input video file
+            output_dir: Directory for output files
+            keyframe_interval: Frames between player detection keyframes
+            iou_threshold: IoU threshold for matching detections
+            max_total_objects: Maximum players to track
+            num_sample_frames: Number of sample frames to save
+            max_seconds: Limit video to this many seconds (None for full video)
+            team_names: Tuple of team names (team1, team2)
+            jersey_ocr_interval: Frames between jersey OCR attempts
+            smooth_tactical: Apply smoothing to tactical view positions
+            resume: If True, resume from last checkpoint. If False, start fresh.
+            clear_checkpoints: If True, clear all checkpoints before starting
+
+        Returns:
+            Dict with results including paths to output videos and frames
+        """
         os.makedirs(output_dir, exist_ok=True)
-        temp_dir = tempfile.mkdtemp()
-        frames_dir = os.path.join(temp_dir, "frames")
+
+        # Initialize checkpoint system
+        checkpoint_dir = os.path.join(output_dir, '.checkpoints')
+        checkpoint = PipelineCheckpoint(checkpoint_dir)
+
+        if clear_checkpoints:
+            checkpoint.clear()
+
+        if resume and checkpoint.get_progress_summary() != "No stages completed":
+            print(f"[Resume Mode] {checkpoint.get_progress_summary()}")
+        else:
+            print("[Fresh Start] No checkpoints found or resume disabled")
+
+        # Use persistent frames directory for checkpointing
+        frames_dir = os.path.join(output_dir, '.frames_cache')
         os.makedirs(frames_dir, exist_ok=True)
 
         # Reset validators
@@ -679,59 +815,106 @@ class PlayerTracker:
         self.team_validator.reset()
 
         try:
-            print("Extracting frames...")
-            cap = cv2.VideoCapture(video_path)
-            if not cap.isOpened():
-                raise ValueError(f"Could not open video file: {video_path}")
+            # ============ STAGE: Frame Extraction ============
+            if resume and checkpoint.is_stage_complete('frames_extracted'):
+                print("Extracting frames... [CACHED]")
+                fps = checkpoint.get_metadata('fps')
+                width = checkpoint.get_metadata('width')
+                height = checkpoint.get_metadata('height')
+                frame_count = checkpoint.get_metadata('frame_count')
+                # Load frames from disk
+                frames = []
+                for idx in range(frame_count):
+                    frame_path = os.path.join(frames_dir, f"{idx:05d}.jpg")
+                    if os.path.exists(frame_path):
+                        frames.append(cv2.imread(frame_path))
+                print(f"  Loaded {len(frames)} frames from cache")
+            else:
+                print("Extracting frames...")
+                cap = cv2.VideoCapture(video_path)
+                if not cap.isOpened():
+                    raise ValueError(f"Could not open video file: {video_path}")
 
-            fps = cap.get(cv2.CAP_PROP_FPS)
-            if fps == 0:
-                fps = 30.0  # Default fallback
-                print(f"  Warning: Could not read FPS, defaulting to {fps}")
-            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                fps = cap.get(cv2.CAP_PROP_FPS)
+                if fps == 0:
+                    fps = 30.0
+                    print(f"  Warning: Could not read FPS, defaulting to {fps}")
+                width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-            frames = []
-            while True:
-                ret, frame = cap.read()
-                if not ret:
-                    break
-                frames.append(frame)
-            cap.release()
+                frames = []
+                while True:
+                    ret, frame = cap.read()
+                    if not ret:
+                        break
+                    frames.append(frame)
+                cap.release()
 
-            if max_seconds is not None:
-                max_frames = int(fps * max_seconds)
-                if len(frames) > max_frames:
-                    frames = frames[:max_frames]
+                if max_seconds is not None:
+                    max_frames = int(fps * max_seconds)
+                    if len(frames) > max_frames:
+                        frames = frames[:max_frames]
 
-            frame_count = len(frames)
-            print(f"Loaded {frame_count} frames ({frame_count/fps:.1f}s)")
+                frame_count = len(frames)
+                print(f"Loaded {frame_count} frames ({frame_count/fps:.1f}s)")
 
-            print("Saving frames to disk...")
-            for idx, frame in tqdm(enumerate(frames), total=len(frames), desc="Saving frames"):
-                cv2.imwrite(os.path.join(frames_dir, f"{idx:05d}.jpg"), frame)
+                print("Saving frames to disk...")
+                for idx, frame in tqdm(enumerate(frames), total=len(frames), desc="Saving frames"):
+                    cv2.imwrite(os.path.join(frames_dir, f"{idx:05d}.jpg"), frame)
 
-            print("Collecting player crops...")
-            all_crops = []
-            crop_indices = list(range(0, len(frames), 30))
-            for i in tqdm(crop_indices, desc="Collecting crops"):
-                sv_detections = self.player_detector.detect(frames[i])
-                players = sv_detections[np.isin(sv_detections.class_id, PLAYER_CLASS_IDS)]
-                if len(players) > 0:
-                    crops = get_player_crops(frames[i], players, scale_factor=0.4)
-                    all_crops.extend(crops)
-            print(f"  Collected {len(all_crops)} crops")
+                # Save metadata
+                checkpoint.save_metadata('fps', fps)
+                checkpoint.save_metadata('width', width)
+                checkpoint.save_metadata('height', height)
+                checkpoint.save_metadata('frame_count', frame_count)
+                checkpoint.mark_stage_complete('frames_extracted')
 
-            print("Training team classifier...")
-            # Use same device as main tracker for team classifier
+            # ============ STAGE: Crop Collection ============
+            if resume and checkpoint.is_stage_complete('crops_collected'):
+                print("Collecting player crops... [CACHED]")
+                all_crops = checkpoint.load_data('crops', [])
+                print(f"  Loaded {len(all_crops)} crops from cache")
+            else:
+                print("Collecting player crops...")
+                all_crops = []
+                crop_indices = list(range(0, len(frames), 30))
+                for i in tqdm(crop_indices, desc="Collecting crops"):
+                    sv_detections = self.player_detector.detect(frames[i])
+                    players = sv_detections[np.isin(sv_detections.class_id, PLAYER_CLASS_IDS)]
+                    if len(players) > 0:
+                        crops = get_player_crops(frames[i], players, scale_factor=0.4)
+                        all_crops.extend(crops)
+                print(f"  Collected {len(all_crops)} crops")
+                checkpoint.save_data('crops', all_crops)
+                checkpoint.mark_stage_complete('crops_collected')
+
+            # ============ STAGE: Team Classifier Training ============
             tc_device = "cuda" if self.device.type == "cuda" else "cpu"
             team_classifier = TeamClassifier(n_teams=2, device=tc_device)
-            if len(all_crops) >= 2:
-                team_classifier.fit(all_crops)
+
+            if resume and checkpoint.is_stage_complete('team_classifier_trained'):
+                print("Training team classifier... [CACHED]")
+                tc_data = checkpoint.load_data('team_classifier')
+                if tc_data:
+                    team_classifier.cluster_centers = tc_data.get('cluster_centers')
+                    team_classifier.kmeans = tc_data.get('kmeans')
+                    team_classifier.is_fitted = tc_data.get('is_fitted', False)
+                    print(f"  Loaded team classifier from cache (fitted={team_classifier.is_fitted})")
+            else:
+                print("Training team classifier...")
+                if len(all_crops) >= 2:
+                    team_classifier.fit(all_crops)
+                checkpoint.save_data('team_classifier', {
+                    'cluster_centers': team_classifier.cluster_centers,
+                    'kmeans': team_classifier.kmeans,
+                    'is_fitted': team_classifier.is_fitted,
+                })
+                checkpoint.mark_stage_complete('team_classifier_trained')
 
             # Set team names
             team_classifier.team_names = {0: team_names[0], 1: team_names[1]}
 
+            # ============ STAGE: Court Detection ============
             print("Detecting court...")
             court_result = self.court_detector.detect_keypoints(frames[0])
             print(f"  Court keypoints: {court_result['count'] if court_result else 0}")
@@ -742,158 +925,192 @@ class PlayerTracker:
             keyframe_indices = list(range(0, len(frames), keyframe_interval))
             print(f"Will detect at {len(keyframe_indices)} keyframes")
 
-            print("Loading SAM2 model...")
-            predictor = build_sam2_video_predictor(
-                config_file=f"configs/sam2.1/{self.sam2_config}.yaml",
-                ckpt_path=self.sam2_checkpoint,
-                device=self.device,
-            )
+            # ============ STAGE: SAM2 Segmentation ============
+            if resume and checkpoint.is_stage_complete('sam2_segmented'):
+                print("SAM2 segmentation... [CACHED]")
+                video_segments = checkpoint.load_data('video_segments', {})
+                tracking_info = checkpoint.load_data('tracking_info', {})
+                current_boxes = checkpoint.load_data('current_boxes', {})
+                print(f"  Loaded {len(video_segments)} frames with {len(tracking_info)} tracked objects from cache")
+            else:
+                print("Loading SAM2 model...")
+                predictor = build_sam2_video_predictor(
+                    config_file=f"configs/sam2.1/{self.sam2_config}.yaml",
+                    ckpt_path=self.sam2_checkpoint,
+                    device=self.device,
+                )
 
-            print("Initializing video tracking...")
-            # Only use autocast on CUDA, not CPU
-            # Use float16 instead of bfloat16 for better compatibility with SAM2
-            use_autocast = self.device.type == "cuda"
-            autocast_dtype = torch.float16 if use_autocast else torch.float32
-            with torch.inference_mode(), torch.amp.autocast(device_type="cuda", dtype=autocast_dtype, enabled=use_autocast):
-                inference_state = predictor.init_state(video_path=frames_dir)
+                print("Initializing video tracking...")
+                # Only use autocast on CUDA, not CPU
+                # Use float16 instead of bfloat16 for better compatibility with SAM2
+                use_autocast = self.device.type == "cuda"
+                autocast_dtype = torch.float16 if use_autocast else torch.float32
+                with torch.inference_mode(), torch.amp.autocast(device_type="cuda", dtype=autocast_dtype, enabled=use_autocast):
+                    inference_state = predictor.init_state(video_path=frames_dir)
 
-                tracking_info = {}
-                current_boxes = {}
-                next_obj_id = 0
+                    tracking_info = {}
+                    current_boxes = {}
+                    next_obj_id = 0
 
-                print("Adding tracking targets at keyframes...")
-                for kf_idx in tqdm(keyframe_indices, desc="Keyframe detection"):
-                    if next_obj_id >= max_total_objects:
-                        break
-
-                    frame = frames[kf_idx]
-                    sv_detections = self.player_detector.detect(frame)
-
-                    detections = []
-                    for i in range(len(sv_detections)):
-                        box = sv_detections.xyxy[i].tolist()
-                        conf = float(sv_detections.confidence[i]) if sv_detections.confidence is not None else 1.0
-                        cls_id = int(sv_detections.class_id[i]) if sv_detections.class_id is not None else 0
-                        cls_name = 'player' if cls_id in PLAYER_CLASS_IDS else 'referee'
-                        detections.append({'box': box, 'confidence': conf, 'class': cls_name})
-
-                    filtered = [d for d in detections if court_mask[
-                        min(max(int((d['box'][1] + d['box'][3]) / 2), 0), height - 1),
-                        min(max(int((d['box'][0] + d['box'][2]) / 2), 0), width - 1)
-                    ] > 0]
-
-                    matched, unmatched = self._match_detections_to_existing(filtered, current_boxes, iou_threshold)
-
-                    new_count = 0
-                    for det in unmatched:
+                    print("Adding tracking targets at keyframes...")
+                    for kf_idx in tqdm(keyframe_indices, desc="Keyframe detection"):
                         if next_obj_id >= max_total_objects:
                             break
 
-                        box = det['box']
-                        box_np = np.array([[box[0], box[1], box[2], box[3]]], dtype=np.float32)
+                        frame = frames[kf_idx]
+                        sv_detections = self.player_detector.detect(frame)
 
-                        predictor.add_new_points_or_box(
-                            inference_state=inference_state,
-                            frame_idx=kf_idx,
-                            obj_id=next_obj_id,
-                            box=box_np,
-                        )
+                        detections = []
+                        for i in range(len(sv_detections)):
+                            box = sv_detections.xyxy[i].tolist()
+                            conf = float(sv_detections.confidence[i]) if sv_detections.confidence is not None else 1.0
+                            cls_id = int(sv_detections.class_id[i]) if sv_detections.class_id is not None else 0
+                            cls_name = 'player' if cls_id in PLAYER_CLASS_IDS else 'referee'
+                            detections.append({'box': box, 'confidence': conf, 'class': cls_name})
 
-                        tracking_info[next_obj_id] = {'class': det['class'], 'confidence': det['confidence']}
-                        current_boxes[next_obj_id] = box
-                        next_obj_id += 1
-                        new_count += 1
+                        filtered = [d for d in detections if court_mask[
+                            min(max(int((d['box'][1] + d['box'][3]) / 2), 0), height - 1),
+                            min(max(int((d['box'][0] + d['box'][2]) / 2), 0), width - 1)
+                        ] > 0]
 
-                print(f"Total tracking targets: {len(tracking_info)}")
+                        matched, unmatched = self._match_detections_to_existing(filtered, current_boxes, iou_threshold)
 
-                if len(tracking_info) == 0:
-                    return {"error": "No players detected"}
+                        new_count = 0
+                        for det in unmatched:
+                            if next_obj_id >= max_total_objects:
+                                break
 
-                print("Propagating masks through video...")
-                video_segments = {}
-                pbar = tqdm(total=frame_count, desc="Mask propagation")
+                            box = det['box']
+                            box_np = np.array([[box[0], box[1], box[2], box[3]]], dtype=np.float32)
 
-                for out_frame_idx, out_obj_ids, out_mask_logits in predictor.propagate_in_video(inference_state):
-                    masks_dict = {}
-                    for i in range(len(out_obj_ids)):
-                        obj_id = int(out_obj_ids[i])
-                        mask = (out_mask_logits[i] > 0.0).cpu().numpy()
-
-                        # Clean up mask segments
-                        mask = filter_segments_by_distance(mask, relative_distance=0.03)
-
-                        masks_dict[obj_id] = mask
-                        box = mask_to_box(mask)
-                        if box is not None:
-                            current_boxes[obj_id] = box
-                    video_segments[out_frame_idx] = masks_dict
-                    pbar.update(1)
-                pbar.close()
-
-            print("Assigning teams...")
-            if 0 in video_segments and team_classifier.is_fitted:
-                for obj_id, mask in video_segments[0].items():
-                    if obj_id not in tracking_info:
-                        continue
-                    if tracking_info[obj_id]['class'] == 'referee':
-                        tracking_info[obj_id]['team'] = -1
-                        tracking_info[obj_id]['team_name'] = 'Referee'
-                        continue
-                    box = mask_to_box(mask)
-                    if box is None:
-                        continue
-                    det = sv.Detections(xyxy=np.array([box]), class_id=np.array([3]))
-                    crops = get_player_crops(frames[0], det, scale_factor=0.4)
-                    if crops:
-                        team_id = team_classifier.predict_single(crops[0])
-                        tracking_info[obj_id]['team'] = team_id
-                        tracking_info[obj_id]['team_name'] = team_classifier.get_team_name(team_id)
-
-            for obj_id, info in tracking_info.items():
-                if 'team' not in info:
-                    info['team'] = 0
-                    info['team_name'] = team_names[0]
-
-            # Jersey number detection pass
-            jersey_numbers = {}
-            if self.enable_jersey_detection:
-                print("Detecting jersey numbers...")
-                ocr_frame_indices = list(range(0, frame_count, jersey_ocr_interval))
-                for frame_idx in tqdm(ocr_frame_indices, desc="Jersey OCR"):
-                    if frame_idx not in video_segments:
-                        continue
-
-                    frame = frames[frame_idx]
-                    player_masks = {}
-                    player_boxes = {}
-
-                    for obj_id, mask in video_segments[frame_idx].items():
-                        if obj_id in tracking_info and tracking_info[obj_id]['class'] == 'player':
-                            player_masks[obj_id] = mask
-                            box = mask_to_box(mask)
-                            if box:
-                                player_boxes[obj_id] = box
-
-                    if player_masks:
-                        matches = self._detect_jersey_numbers(frame, player_masks, player_boxes)
-                        if matches:
-                            self.number_validator.update(
-                                tracker_ids=list(matches.keys()),
-                                values=list(matches.values())
+                            predictor.add_new_points_or_box(
+                                inference_state=inference_state,
+                                frame_idx=kf_idx,
+                                obj_id=next_obj_id,
+                                box=box_np,
                             )
 
-                jersey_numbers = self.number_validator.get_all_validated()
-                print(f"  Validated jersey numbers: {jersey_numbers}")
+                            tracking_info[next_obj_id] = {'class': det['class'], 'confidence': det['confidence']}
+                            current_boxes[next_obj_id] = box
+                            next_obj_id += 1
+                            new_count += 1
 
-            # Store jersey numbers in tracking info
-            for obj_id, number in jersey_numbers.items():
-                if obj_id in tracking_info:
-                    tracking_info[obj_id]['jersey_number'] = number
-                    team_name = tracking_info[obj_id].get('team_name')
-                    if team_name and team_name in TEAM_ROSTERS:
-                        player_name = get_player_name(team_name, number)
-                        if player_name:
-                            tracking_info[obj_id]['player_name'] = player_name
+                    print(f"Total tracking targets: {len(tracking_info)}")
+
+                    if len(tracking_info) == 0:
+                        return {"error": "No players detected"}
+
+                    print("Propagating masks through video...")
+                    video_segments = {}
+                    pbar = tqdm(total=frame_count, desc="Mask propagation")
+
+                    for out_frame_idx, out_obj_ids, out_mask_logits in predictor.propagate_in_video(inference_state):
+                        masks_dict = {}
+                        for i in range(len(out_obj_ids)):
+                            obj_id = int(out_obj_ids[i])
+                            mask = (out_mask_logits[i] > 0.0).cpu().numpy()
+
+                            # Clean up mask segments
+                            mask = filter_segments_by_distance(mask, relative_distance=0.03)
+
+                            masks_dict[obj_id] = mask
+                            box = mask_to_box(mask)
+                            if box is not None:
+                                current_boxes[obj_id] = box
+                        video_segments[out_frame_idx] = masks_dict
+                        pbar.update(1)
+                    pbar.close()
+
+                # Save SAM2 results (this is the most expensive stage!)
+                print("Saving SAM2 segmentation results...")
+                checkpoint.save_data('video_segments', video_segments)
+                checkpoint.save_data('tracking_info', tracking_info)
+                checkpoint.save_data('current_boxes', current_boxes)
+                checkpoint.mark_stage_complete('sam2_segmented')
+
+            # ============ STAGE: Team Assignment ============
+            if resume and checkpoint.is_stage_complete('teams_assigned'):
+                print("Assigning teams... [CACHED]")
+                tracking_info = checkpoint.load_data('tracking_info_with_teams', tracking_info)
+                print(f"  Loaded team assignments from cache")
+            else:
+                print("Assigning teams...")
+                if 0 in video_segments and team_classifier.is_fitted:
+                    for obj_id, mask in video_segments[0].items():
+                        if obj_id not in tracking_info:
+                            continue
+                        if tracking_info[obj_id]['class'] == 'referee':
+                            tracking_info[obj_id]['team'] = -1
+                            tracking_info[obj_id]['team_name'] = 'Referee'
+                            continue
+                        box = mask_to_box(mask)
+                        if box is None:
+                            continue
+                        det = sv.Detections(xyxy=np.array([box]), class_id=np.array([3]))
+                        crops = get_player_crops(frames[0], det, scale_factor=0.4)
+                        if crops:
+                            team_id = team_classifier.predict_single(crops[0])
+                            tracking_info[obj_id]['team'] = team_id
+                            tracking_info[obj_id]['team_name'] = team_classifier.get_team_name(team_id)
+
+                for obj_id, info in tracking_info.items():
+                    if 'team' not in info:
+                        info['team'] = 0
+                        info['team_name'] = team_names[0]
+
+                checkpoint.save_data('tracking_info_with_teams', tracking_info)
+                checkpoint.mark_stage_complete('teams_assigned')
+
+            # ============ STAGE: Jersey Detection ============
+            jersey_numbers = {}
+            if resume and checkpoint.is_stage_complete('jersey_detected'):
+                print("Detecting jersey numbers... [CACHED]")
+                jersey_numbers = checkpoint.load_data('jersey_numbers', {})
+                tracking_info = checkpoint.load_data('tracking_info_with_jerseys', tracking_info)
+                print(f"  Loaded {len(jersey_numbers)} jersey numbers from cache")
+            else:
+                if self.enable_jersey_detection:
+                    print("Detecting jersey numbers...")
+                    ocr_frame_indices = list(range(0, frame_count, jersey_ocr_interval))
+                    for frame_idx in tqdm(ocr_frame_indices, desc="Jersey OCR"):
+                        if frame_idx not in video_segments:
+                            continue
+
+                        frame = frames[frame_idx]
+                        player_masks = {}
+                        player_boxes = {}
+
+                        for obj_id, mask in video_segments[frame_idx].items():
+                            if obj_id in tracking_info and tracking_info[obj_id]['class'] == 'player':
+                                player_masks[obj_id] = mask
+                                box = mask_to_box(mask)
+                                if box:
+                                    player_boxes[obj_id] = box
+
+                        if player_masks:
+                            matches = self._detect_jersey_numbers(frame, player_masks, player_boxes)
+                            if matches:
+                                self.number_validator.update(
+                                    tracker_ids=list(matches.keys()),
+                                    values=list(matches.values())
+                                )
+
+                    jersey_numbers = self.number_validator.get_all_validated()
+                    print(f"  Validated jersey numbers: {jersey_numbers}")
+
+                # Store jersey numbers in tracking info
+                for obj_id, number in jersey_numbers.items():
+                    if obj_id in tracking_info:
+                        tracking_info[obj_id]['jersey_number'] = number
+                        team_name = tracking_info[obj_id].get('team_name')
+                        if team_name and team_name in TEAM_ROSTERS:
+                            player_name = get_player_name(team_name, number)
+                            if player_name:
+                                tracking_info[obj_id]['player_name'] = player_name
+
+                checkpoint.save_data('jersey_numbers', jersey_numbers)
+                checkpoint.save_data('tracking_info_with_jerseys', tracking_info)
+                checkpoint.mark_stage_complete('jersey_detected')
 
             print("Initializing tactical view...")
             tactical_view = TacticalView()
@@ -958,26 +1175,35 @@ class PlayerTracker:
 
                 return annotated, player_positions
 
-            # First pass: collect all positions
-            print("Collecting positions for smoothing...")
-            for frame_idx in tqdm(range(frame_count), desc="Collecting positions"):
-                if frame_idx in video_segments:
-                    positions = {}
-                    for obj_id, mask in video_segments[frame_idx].items():
-                        box = mask_to_box(mask)
-                        if box:
-                            x1, y1, x2, y2 = box
-                            positions[obj_id] = ((x1 + x2) / 2, y2)
-                    positions_history.append(positions)
-                else:
-                    positions_history.append({})
-
-            # Smooth positions
-            if smooth_tactical and len(positions_history) > 5:
-                print("Smoothing tactical positions...")
-                smoothed_positions = smooth_tactical_positions(positions_history, window_size=5)
+            # ============ STAGE: Position Smoothing ============
+            if resume and checkpoint.is_stage_complete('positions_smoothed'):
+                print("Collecting and smoothing positions... [CACHED]")
+                smoothed_positions = checkpoint.load_data('smoothed_positions', [])
+                print(f"  Loaded {len(smoothed_positions)} smoothed position frames from cache")
             else:
-                smoothed_positions = positions_history
+                # First pass: collect all positions
+                print("Collecting positions for smoothing...")
+                for frame_idx in tqdm(range(frame_count), desc="Collecting positions"):
+                    if frame_idx in video_segments:
+                        positions = {}
+                        for obj_id, mask in video_segments[frame_idx].items():
+                            box = mask_to_box(mask)
+                            if box:
+                                x1, y1, x2, y2 = box
+                                positions[obj_id] = ((x1 + x2) / 2, y2)
+                        positions_history.append(positions)
+                    else:
+                        positions_history.append({})
+
+                # Smooth positions
+                if smooth_tactical and len(positions_history) > 5:
+                    print("Smoothing tactical positions...")
+                    smoothed_positions = smooth_tactical_positions(positions_history, window_size=5)
+                else:
+                    smoothed_positions = positions_history
+
+                checkpoint.save_data('smoothed_positions', smoothed_positions)
+                checkpoint.mark_stage_complete('positions_smoothed')
 
             sample_indices = [int(i * (frame_count - 1) / (num_sample_frames - 1)) for i in range(num_sample_frames)]
 
@@ -1027,5 +1253,7 @@ class PlayerTracker:
                 "jersey_numbers": jersey_numbers,
             }
 
-        finally:
-            shutil.rmtree(temp_dir, ignore_errors=True)
+        except Exception as e:
+            print(f"\n[Pipeline Error] {e}")
+            print(f"[Checkpoint] Progress saved. Resume with resume=True to continue from: {checkpoint.get_progress_summary()}")
+            raise
