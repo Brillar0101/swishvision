@@ -12,6 +12,7 @@ import supervision as sv
 from typing import Dict, List, Tuple, Optional
 import tempfile
 import shutil
+from tqdm import tqdm
 
 from sam2.build_sam import build_sam2_video_predictor
 
@@ -190,7 +191,7 @@ class PlayerTracker:
         portfolio_paths = []
         height, width = frames[0].shape[:2]
 
-        for sample_idx, frame_idx in enumerate(sample_indices):
+        for sample_idx, frame_idx in tqdm(enumerate(sample_indices), total=len(sample_indices), desc="Portfolio stages"):
             frame = frames[frame_idx]
             masks = video_segments.get(frame_idx, {})
             positions = smoothed_positions[frame_idx] if frame_idx < len(smoothed_positions) else {}
@@ -495,12 +496,14 @@ class PlayerTracker:
             frame_count = len(frames)
             print(f"Loaded {frame_count} frames ({frame_count/fps:.1f}s)")
 
-            for idx, frame in enumerate(frames):
+            print("Saving frames to disk...")
+            for idx, frame in tqdm(enumerate(frames), total=len(frames), desc="Saving frames"):
                 cv2.imwrite(os.path.join(frames_dir, f"{idx:05d}.jpg"), frame)
 
             print("Collecting player crops...")
             all_crops = []
-            for i in range(0, len(frames), 30):
+            crop_indices = list(range(0, len(frames), 30))
+            for i in tqdm(crop_indices, desc="Collecting crops"):
                 sv_detections = self.player_detector.detect(frames[i])
                 players = sv_detections[np.isin(sv_detections.class_id, PLAYER_CLASS_IDS)]
                 if len(players) > 0:
@@ -509,7 +512,9 @@ class PlayerTracker:
             print(f"  Collected {len(all_crops)} crops")
 
             print("Training team classifier...")
-            team_classifier = TeamClassifier(n_teams=2, device="cpu")
+            # Use same device as main tracker for team classifier
+            tc_device = "cuda" if self.device.type == "cuda" else "cpu"
+            team_classifier = TeamClassifier(n_teams=2, device=tc_device)
             if len(all_crops) >= 2:
                 team_classifier.fit(all_crops)
 
@@ -543,7 +548,8 @@ class PlayerTracker:
                 current_boxes = {}
                 next_obj_id = 0
 
-                for kf_idx in keyframe_indices:
+                print("Adding tracking targets at keyframes...")
+                for kf_idx in tqdm(keyframe_indices, desc="Keyframe detection"):
                     if next_obj_id >= max_total_objects:
                         break
 
@@ -585,15 +591,14 @@ class PlayerTracker:
                         next_obj_id += 1
                         new_count += 1
 
-                    print(f"  Frame {kf_idx}: {len(filtered)} on-court, +{new_count} new (total: {next_obj_id})")
-
                 print(f"Total tracking targets: {len(tracking_info)}")
 
                 if len(tracking_info) == 0:
                     return {"error": "No players detected"}
 
-                print("Propagating masks...")
+                print("Propagating masks through video...")
                 video_segments = {}
+                pbar = tqdm(total=frame_count, desc="Mask propagation")
 
                 for out_frame_idx, out_obj_ids, out_mask_logits in predictor.propagate_in_video(inference_state):
                     masks_dict = {}
@@ -609,8 +614,8 @@ class PlayerTracker:
                         if box is not None:
                             current_boxes[obj_id] = box
                     video_segments[out_frame_idx] = masks_dict
-                    if out_frame_idx % 50 == 0:
-                        print(f"    Frame {out_frame_idx}/{frame_count}")
+                    pbar.update(1)
+                pbar.close()
 
             print("Assigning teams...")
             if 0 in video_segments and team_classifier.is_fitted:
@@ -640,7 +645,8 @@ class PlayerTracker:
             jersey_numbers = {}
             if self.enable_jersey_detection:
                 print("Detecting jersey numbers...")
-                for frame_idx in range(0, frame_count, jersey_ocr_interval):
+                ocr_frame_indices = list(range(0, frame_count, jersey_ocr_interval))
+                for frame_idx in tqdm(ocr_frame_indices, desc="Jersey OCR"):
                     if frame_idx not in video_segments:
                         continue
 
@@ -662,10 +668,6 @@ class PlayerTracker:
                                 tracker_ids=list(matches.keys()),
                                 values=list(matches.values())
                             )
-
-                    if frame_idx % 50 == 0:
-                        validated = self.number_validator.get_all_validated()
-                        print(f"    Frame {frame_idx}: {len(validated)} numbers validated")
 
                 jersey_numbers = self.number_validator.get_all_validated()
                 print(f"  Validated jersey numbers: {jersey_numbers}")
@@ -745,7 +747,7 @@ class PlayerTracker:
 
             # First pass: collect all positions
             print("Collecting positions for smoothing...")
-            for frame_idx in range(frame_count):
+            for frame_idx in tqdm(range(frame_count), desc="Collecting positions"):
                 if frame_idx in video_segments:
                     positions = {}
                     for obj_id, mask in video_segments[frame_idx].items():
@@ -776,7 +778,7 @@ class PlayerTracker:
 
             print("Generating sample frames...")
             sample_frames = []
-            for idx, frame_idx in enumerate(sample_indices):
+            for idx, frame_idx in tqdm(enumerate(sample_indices), total=len(sample_indices), desc="Sample frames"):
                 smoothed = smoothed_positions[frame_idx] if frame_idx < len(smoothed_positions) else None
                 annotated, _ = annotate_frame(frames[frame_idx], frame_idx, smoothed)
                 path = os.path.join(output_dir, f"tracking_frame_{idx+1:02d}.jpg")
