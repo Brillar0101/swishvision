@@ -236,46 +236,87 @@ class ViewTransformer:
 
 def draw_court(width: int = TACTICAL_WIDTH, height: int = TACTICAL_HEIGHT) -> np.ndarray:
     """
-    Draw an NBA basketball court with BLUE background.
+    Draw an NBA basketball court matching Roboflow sports library style.
 
     Args:
         width: Image width in pixels
         height: Image height in pixels
 
     Returns:
-        Court image (BGR) with blue background
+        Court image (BGR) with tan/wood background
     """
-    # Create blue court background
-    court = np.ones((height, width, 3), dtype=np.uint8)
-    court[:, :] = (180, 100, 50)  # Blue background in BGR
+    import math
 
     # Get court dimensions
-    court_length, court_width = get_court_dimensions()
+    court_length, court_width_ft = get_court_dimensions()
 
     # Scale factors: feet to pixels
     sx = width / court_length
-    sy = height / court_width
-
-    line_color = (255, 255, 255)  # White lines
+    sy = height / court_width_ft
 
     # Helper to convert feet to pixels
     def to_px(x_feet, y_feet):
         return int(x_feet * sx), int(y_feet * sy)
 
-    # Court center
+    def draw_arc(center_x, center_y, radius, start_angle, end_angle, num_points=60):
+        """Draw an arc as a polyline for proper scaling."""
+        points = []
+        for i in range(num_points + 1):
+            angle = math.radians(start_angle + (end_angle - start_angle) * i / num_points)
+            x = center_x + radius * math.cos(angle)
+            y = center_y + radius * math.sin(angle)
+            points.append(to_px(x, y))
+        return np.array(points, dtype=np.int32)
+
+    # Colors (BGR format) - matching Roboflow sports library
+    background_color = (139, 190, 224)  # Tan/wood color (BGR for RGB 224, 190, 139)
+    line_color = (255, 255, 255)        # White lines
+    paint_color = (160, 180, 200)       # Slightly darker paint area
+    rim_color = (0, 128, 255)           # Orange rim
+
+    # Create court background
+    court = np.ones((height, width, 3), dtype=np.uint8)
+    court[:, :] = background_color
+
+    # Court dimensions
     center_x = court_length / 2  # 47 feet
-    center_y = court_width / 2   # 25 feet
+    center_y = court_width_ft / 2   # 25 feet
+
+    # Paint dimensions (NBA)
+    paint_width = 16.0  # 16 feet wide
+    ft_line = 19.0      # Free throw line is 19 feet from baseline
+
+    # Basket position (center of rim is 5.25 feet from baseline)
+    basket_x_left = 5.25
+    basket_x_right = court_length - 5.25
+
+    # Three-point line parameters
+    three_arc_radius = 23.75  # Arc radius from basket center
+
+    # Fill paint areas (left and right)
+    left_paint = np.array([
+        to_px(0, center_y - paint_width/2),
+        to_px(ft_line, center_y - paint_width/2),
+        to_px(ft_line, center_y + paint_width/2),
+        to_px(0, center_y + paint_width/2),
+    ], dtype=np.int32)
+    cv2.fillPoly(court, [left_paint], paint_color)
+
+    right_paint = np.array([
+        to_px(court_length, center_y - paint_width/2),
+        to_px(court_length - ft_line, center_y - paint_width/2),
+        to_px(court_length - ft_line, center_y + paint_width/2),
+        to_px(court_length, center_y + paint_width/2),
+    ], dtype=np.int32)
+    cv2.fillPoly(court, [right_paint], paint_color)
 
     # Draw court outline
-    cv2.rectangle(court, to_px(0, 0), to_px(court_length, court_width), line_color, 2)
+    cv2.rectangle(court, to_px(0, 0), to_px(court_length, court_width_ft), line_color, 2)
 
     # Draw center line
-    cv2.line(court, to_px(center_x, 0), to_px(center_x, court_width), line_color, 2)
+    cv2.line(court, to_px(center_x, 0), to_px(center_x, court_width_ft), line_color, 2)
 
-    # Paint dimensions
-    paint_width = 16.0  # 16 feet wide
-    ft_line = 19.0  # Free throw line is 19 feet from baseline
-
+    # Draw paint outlines
     # Left paint
     cv2.line(court, to_px(0, center_y - paint_width/2), to_px(ft_line, center_y - paint_width/2), line_color, 2)
     cv2.line(court, to_px(ft_line, center_y - paint_width/2), to_px(ft_line, center_y + paint_width/2), line_color, 2)
@@ -289,49 +330,30 @@ def draw_court(width: int = TACTICAL_WIDTH, height: int = TACTICAL_HEIGHT) -> np
     # Draw center circle (6 feet radius)
     cv2.circle(court, to_px(center_x, center_y), int(6 * sx), line_color, 2)
 
-    # Free throw circles (6 feet radius)
+    # Draw free throw circles (6 feet radius)
     cv2.circle(court, to_px(ft_line, center_y), int(6 * sx), line_color, 2)
     cv2.circle(court, to_px(court_length - ft_line, center_y), int(6 * sx), line_color, 2)
 
-    # Basket positions (5.25 feet from baseline)
-    basket_x_left = 5.25
-    basket_x_right = court_length - 5.25
+    # Draw three-point arcs
+    # Left three-point line (semicircle facing right)
+    arc_points = draw_arc(basket_x_left, center_y, three_arc_radius, -90, 90)
+    cv2.polylines(court, [arc_points], False, line_color, 2)
 
-    # Three-point line: 23.75 feet radius semicircle from basket center
-    three_arc_radius = 23.75
+    # Right three-point line (semicircle facing left)
+    arc_points = draw_arc(basket_x_right, center_y, three_arc_radius, 90, 270)
+    cv2.polylines(court, [arc_points], False, line_color, 2)
 
-    # Draw three-point semicircles using polylines for accurate scaling
-    import math
-
-    def draw_semicircle(center_x, center_y, radius, start_angle, end_angle, num_points=60):
-        """Draw a semicircle as a polyline for proper scaling."""
-        points = []
-        for i in range(num_points + 1):
-            angle = math.radians(start_angle + (end_angle - start_angle) * i / num_points)
-            x = center_x + radius * math.cos(angle)
-            y = center_y + radius * math.sin(angle)
-            points.append(to_px(x, y))
-        points = np.array(points, dtype=np.int32)
-        cv2.polylines(court, [points], False, line_color, 2)
-
-    # Left three-point line (semicircle facing right, from -90 to +90 degrees)
-    draw_semicircle(basket_x_left, center_y, three_arc_radius, -90, 90)
-
-    # Right three-point line (semicircle facing left, from 90 to 270 degrees)
-    draw_semicircle(basket_x_right, center_y, three_arc_radius, 90, 270)
-
-    # Restricted area: 4 feet radius semicircle
+    # Draw restricted area arcs (4 feet radius)
     ra_radius = 4.0
+    arc_points = draw_arc(basket_x_left, center_y, ra_radius, -90, 90)
+    cv2.polylines(court, [arc_points], False, line_color, 2)
+    arc_points = draw_arc(basket_x_right, center_y, ra_radius, 90, 270)
+    cv2.polylines(court, [arc_points], False, line_color, 2)
 
-    # Left restricted area
-    draw_semicircle(basket_x_left, center_y, ra_radius, -90, 90)
-
-    # Right restricted area
-    draw_semicircle(basket_x_right, center_y, ra_radius, 90, 270)
-
-    # Draw baskets (orange circles)
-    cv2.circle(court, to_px(basket_x_left, center_y), int(0.75 * sx), (0, 128, 255), -1)
-    cv2.circle(court, to_px(basket_x_right, center_y), int(0.75 * sx), (0, 128, 255), -1)
+    # Draw rims (orange circles)
+    rim_radius = max(3, int(0.75 * sx))
+    cv2.circle(court, to_px(basket_x_left, center_y), rim_radius, rim_color, -1)
+    cv2.circle(court, to_px(basket_x_right, center_y), rim_radius, rim_color, -1)
 
     return court
 
