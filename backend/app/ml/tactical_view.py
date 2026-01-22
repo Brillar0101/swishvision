@@ -245,15 +245,14 @@ def draw_court(width: int = TACTICAL_WIDTH, height: int = TACTICAL_HEIGHT) -> np
     Returns:
         Court image (BGR) with blue background
     """
-    config = get_court_config()
-
     # Create blue court background
     court = np.ones((height, width, 3), dtype=np.uint8)
     court[:, :] = (180, 100, 50)  # Blue background in BGR
 
+    # Get court dimensions
+    court_length, court_width = get_court_dimensions()
+
     # Scale factors: feet to pixels
-    court_length = config.width   # 94 feet
-    court_width = config.length   # 50 feet
     sx = width / court_length
     sy = height / court_width
 
@@ -263,17 +262,36 @@ def draw_court(width: int = TACTICAL_WIDTH, height: int = TACTICAL_HEIGHT) -> np
     def to_px(x_feet, y_feet):
         return int(x_feet * sx), int(y_feet * sy)
 
-    # Draw edges from the court configuration
-    for edge in config.edges:
-        start_idx, end_idx = edge
-        if start_idx < len(config.vertices) and end_idx < len(config.vertices):
-            x1, y1 = config.vertices[start_idx]
-            x2, y2 = config.vertices[end_idx]
-            cv2.line(court, to_px(x1, y1), to_px(x2, y2), line_color, 2)
-
     # Court center
     center_x = court_length / 2  # 47 feet
     center_y = court_width / 2   # 25 feet
+
+    # Draw court outline
+    cv2.rectangle(court, to_px(0, 0), to_px(court_length, court_width), line_color, 2)
+
+    # Draw center line
+    cv2.line(court, to_px(center_x, 0), to_px(center_x, court_width), line_color, 2)
+
+    # Paint dimensions
+    paint_width = 16.0  # 16 feet wide
+    ft_line = 19.0  # Free throw line is 19 feet from baseline
+
+    # Left paint
+    cv2.line(court, to_px(0, center_y - paint_width/2), to_px(ft_line, center_y - paint_width/2), line_color, 2)
+    cv2.line(court, to_px(ft_line, center_y - paint_width/2), to_px(ft_line, center_y + paint_width/2), line_color, 2)
+    cv2.line(court, to_px(0, center_y + paint_width/2), to_px(ft_line, center_y + paint_width/2), line_color, 2)
+
+    # Right paint
+    cv2.line(court, to_px(court_length, center_y - paint_width/2), to_px(court_length - ft_line, center_y - paint_width/2), line_color, 2)
+    cv2.line(court, to_px(court_length - ft_line, center_y - paint_width/2), to_px(court_length - ft_line, center_y + paint_width/2), line_color, 2)
+    cv2.line(court, to_px(court_length, center_y + paint_width/2), to_px(court_length - ft_line, center_y + paint_width/2), line_color, 2)
+
+    # Three-point corner lines (22 feet from sideline to corner three)
+    three_corner = 22.0
+    cv2.line(court, to_px(0, 0), to_px(three_corner, 0), line_color, 2)
+    cv2.line(court, to_px(0, court_width), to_px(three_corner, court_width), line_color, 2)
+    cv2.line(court, to_px(court_length, 0), to_px(court_length - three_corner, 0), line_color, 2)
+    cv2.line(court, to_px(court_length, court_width), to_px(court_length - three_corner, court_width), line_color, 2)
 
     # Draw center circle (6 feet radius)
     cv2.circle(court, to_px(center_x, center_y), int(6 * sx), line_color, 2)
