@@ -87,6 +87,12 @@ class BasketballObjectDetector:
             iou_threshold=self.iou_threshold
         )[0]
         detections = sv.Detections.from_inference(result)
+
+        # Filter out class 2 (number) - not needed for tracking
+        if len(detections) > 0:
+            mask = detections.class_id != 2
+            detections = detections[mask]
+
         return detections
 
     def get_labels(self, detections: sv.Detections) -> list:
