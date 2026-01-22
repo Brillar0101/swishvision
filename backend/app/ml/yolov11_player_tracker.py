@@ -11,11 +11,12 @@ load_dotenv()
 
 class YOLOv11PlayerTracker:
     """
-    Uses YOLOv11 for player and referee tracking with continuous detection
-    every 15 frames to maintain tracking accuracy.
+    Uses YOLOv11 for player and referee tracking with detection on every frame
+    to ensure all players are tracked, including those temporarily obscured
+    or entering the frame.
     """
 
-    def __init__(self, model_path: str = "yolo11x.pt", confidence: float = 0.3):
+    def __init__(self, model_path: str = "yolo11x.pt", confidence: float = 0.2):
         # Load YOLOv11 model
         self.model = YOLO(model_path)
         self.confidence = confidence
@@ -25,8 +26,14 @@ class YOLOv11PlayerTracker:
         self.court_detector = CourtDetector()
         self._court_hull = None
 
-        # Tracking state
-        self.tracker = sv.ByteTrack()
+        # Tracking state - configure ByteTrack to be more persistent
+        self.tracker = sv.ByteTrack(
+            track_activation_threshold=0.2,  # Lower threshold to catch more players
+            lost_track_buffer=60,  # Keep tracking for 60 frames even if lost (2 sec at 30fps)
+            minimum_matching_threshold=0.7,  # IoU threshold for matching
+            frame_rate=30,  # Assumed frame rate
+            minimum_consecutive_frames=1,  # Track immediately on first detection
+        )
 
         self.colors = {
             "player": (0, 255, 0),      # Green
@@ -133,16 +140,17 @@ class YOLOv11PlayerTracker:
 
     def process_video(self, video_path: str, output_dir: str,
                       filter_court: bool = True,
-                      detection_interval: int = 15,
                       max_seconds: float = 10.0) -> dict:
         """
         Process video with YOLOv11 tracking.
+
+        Runs detection on EVERY frame to ensure all players are tracked,
+        including those temporarily obscured or entering the frame.
 
         Args:
             video_path: Path to input video
             output_dir: Output directory for results
             filter_court: Whether to filter detections to on-court only
-            detection_interval: Run detection every N frames (default 15)
             max_seconds: Maximum seconds of video to process (default 10)
         """
         os.makedirs(output_dir, exist_ok=True)
@@ -158,7 +166,7 @@ class YOLOv11PlayerTracker:
         total_frames = min(total_frames, max_frames)
 
         print(f"Processing {total_frames} frames ({max_seconds}s at {fps:.1f} FPS)")
-        print(f"Detection interval: every {detection_interval} frames")
+        print(f"Running detection on every frame for maximum tracking coverage")
 
         # Video writer
         fourcc = cv2.VideoWriter_fourcc(*'mp4v')
@@ -173,52 +181,37 @@ class YOLOv11PlayerTracker:
             "frames_processed": 0
         }
 
-        # Store last detections for frames between detection intervals
-        last_detections = None
-
         from tqdm import tqdm
         for frame_idx in tqdm(range(total_frames), desc="Processing video"):
             ret, frame = cap.read()
             if not ret:
                 break
 
-            # Run detection every detection_interval frames
-            if frame_idx % detection_interval == 0:
-                detections = self.detect(frame)
+            # Run detection on EVERY frame to catch all players
+            # This ensures anyone entering the frame or becoming visible gets tracked
+            detections = self.detect(frame)
 
-                # Filter to on-court only
-                if filter_court:
-                    detections = self.filter_on_court(detections, frame)
+            # Filter to on-court only
+            if filter_court:
+                detections = self.filter_on_court(detections, frame)
 
-                # Update tracker with new detections
-                detections = self.tracker.update_with_detections(detections)
+            # Update tracker - ByteTrack handles:
+            # - Matching new detections to existing tracks
+            # - Creating new tracks for new players entering frame
+            # - Keeping tracks alive for temporarily obscured players
+            detections = self.tracker.update_with_detections(detections)
 
-                last_detections = detections
-                stats["detection_frames"] += 1
-                stats["total_detections"] += len(detections)
-            else:
-                # Use tracking to propagate between detection frames
-                if last_detections is not None and len(last_detections) > 0:
-                    # Run detection but only for tracking update
-                    detections = self.detect(frame)
-                    if filter_court:
-                        detections = self.filter_on_court(detections, frame)
-                    detections = self.tracker.update_with_detections(detections)
-                    last_detections = detections
-                else:
-                    detections = sv.Detections.empty()
+            stats["detection_frames"] += 1
+            stats["total_detections"] += len(detections)
 
             # Draw and write frame
-            annotated = self.draw_detections(frame, detections if detections is not None else sv.Detections.empty())
+            annotated = self.draw_detections(frame, detections)
 
             # Add frame info
             cv2.putText(annotated, f"Frame: {frame_idx}", (10, 60),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-            is_detection_frame = frame_idx % detection_interval == 0
-            status = "DETECT" if is_detection_frame else "TRACK"
-            color = (0, 255, 0) if is_detection_frame else (255, 165, 0)
-            cv2.putText(annotated, status, (10, 90),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+            cv2.putText(annotated, f"Tracking: {len(detections)} players", (10, 90),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
 
             output_video.write(annotated)
             stats["frames_processed"] += 1
@@ -249,10 +242,8 @@ if __name__ == "__main__":
                         help="Output directory")
     parser.add_argument("--model", type=str, default="yolo11x.pt",
                         help="YOLOv11 model path (default: yolo11x.pt)")
-    parser.add_argument("--confidence", type=float, default=0.3,
-                        help="Detection confidence threshold (default: 0.3)")
-    parser.add_argument("--detection-interval", type=int, default=15,
-                        help="Run detection every N frames (default: 15)")
+    parser.add_argument("--confidence", type=float, default=0.2,
+                        help="Detection confidence threshold (default: 0.2)")
     parser.add_argument("--max-seconds", type=float, default=10.0,
                         help="Max seconds of video to process (default: 10)")
     parser.add_argument("--no-court-filter", action="store_true",
@@ -266,7 +257,6 @@ if __name__ == "__main__":
         args.video_path,
         args.output_dir,
         filter_court=not args.no_court_filter,
-        detection_interval=args.detection_interval,
         max_seconds=args.max_seconds
     )
 
