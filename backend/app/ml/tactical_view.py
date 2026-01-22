@@ -3,7 +3,11 @@ Tactical View Module for SwishVision.
 
 Generates smoothed homography-based tactical court view from basketball video.
 Uses ycjdo/4 model for player/referee detection and path smoothing.
-Uses roboflow sports library for court configuration.
+
+Homography transformation:
+- Source: Keypoints detected in video frame (pixels)
+- Target: Court vertices in real-world coordinates (feet)
+- Result: Player positions projected to court coordinate system
 
 Team colors (BGR format):
 - Team 0: GREEN (0, 255, 0)
@@ -17,17 +21,27 @@ import numpy as np
 import supervision as sv
 from pathlib import Path
 from typing import Dict, Tuple, Optional
+from dataclasses import dataclass
 from tqdm import tqdm
-
-# Import roboflow sports library for court configuration
-from sports.configs.basketball import CourtConfiguration
 
 from .player_referee_detector import PlayerRefereeDetector, PLAYER_CLASS_IDS, REFEREE_CLASS_IDS
 from .path_smoothing import clean_paths
 from .team_classifier import TeamClassifier, get_player_crops
 
+# Try to import from roboflow sports library (basketball branch)
+try:
+    from sports.basketball import CourtConfiguration, League
+    from sports import MeasurementUnit
+    SPORTS_LIBRARY_AVAILABLE = True
+except ImportError:
+    SPORTS_LIBRARY_AVAILABLE = False
+
 # Court keypoint model
 COURT_KEYPOINT_MODEL_ID = "basketball-court-detection-2/19"
+
+# NBA Court dimensions in feet
+NBA_COURT_LENGTH = 94.0  # Full court length (baseline to baseline)
+NBA_COURT_WIDTH = 50.0   # Full court width (sideline to sideline)
 
 # Tactical view dimensions in pixels
 TACTICAL_WIDTH = 940
@@ -41,41 +55,158 @@ TEAM_COLORS = {
 }
 
 
-def get_court_config() -> CourtConfiguration:
-    """Get basketball court configuration from roboflow sports library."""
-    return CourtConfiguration()
+@dataclass
+class BasketballCourtConfiguration:
+    """
+    Basketball court configuration with 33 keypoints.
+
+    Coordinate system:
+    - Origin (0, 0) at top-left corner of the court
+    - X: 0 to 94 feet (left baseline to right baseline)
+    - Y: 0 to 50 feet (top sideline to bottom sideline)
+
+    The 33 keypoints match the basketball-court-detection-2 model output indices.
+    """
+    width: float = NBA_COURT_LENGTH   # Court length in feet
+    length: float = NBA_COURT_WIDTH   # Court width in feet
+
+    @property
+    def vertices(self) -> np.ndarray:
+        """
+        33 court keypoints in real-world coordinates (feet).
+        Order matches basketball-court-detection-2 keypoint model indices.
+        """
+        # Half court values
+        half_length = self.width / 2  # 47 feet
+        half_width = self.length / 2  # 25 feet
+
+        # Paint dimensions (16 feet wide = 8 feet each side of basket)
+        free_throw_line = 19.0  # 19 feet from baseline
+
+        # Three-point line
+        three_point_corner = 22.0  # Corner three distance from sideline
+        three_point_arc = 23.75  # Arc radius from basket
+
+        # Basket position from baseline
+        basket_from_baseline = 5.25  # 5.25 feet (actually 4 feet + 15 inch rim)
+
+        # Center circle radius
+        center_radius = 6.0
+
+        # Free throw circle radius
+        ft_circle_radius = 6.0
+
+        # Define all 33 vertices (x, y in feet from top-left origin)
+        vertices = np.array([
+            # 0-4: Court corners and center
+            [half_length, half_width],           # 0: Center court
+            [0, 0],                               # 1: Top-left corner
+            [0, self.length],                     # 2: Bottom-left corner
+            [self.width, 0],                      # 3: Top-right corner
+            [self.width, self.length],            # 4: Bottom-right corner
+
+            # 5-9: Left paint
+            [0, half_width - 8],                  # 5: Left paint top (baseline)
+            [0, half_width + 8],                  # 6: Left paint bottom (baseline)
+            [free_throw_line, half_width - 8],   # 7: Left free throw top
+            [free_throw_line, half_width + 8],   # 8: Left free throw bottom
+            [free_throw_line, half_width],       # 9: Left free throw line center
+
+            # 10-14: Right paint
+            [self.width, half_width - 8],        # 10: Right paint top (baseline)
+            [self.width, half_width + 8],        # 11: Right paint bottom (baseline)
+            [self.width - free_throw_line, half_width - 8],  # 12: Right free throw top
+            [self.width - free_throw_line, half_width + 8],  # 13: Right free throw bottom
+            [self.width - free_throw_line, half_width],      # 14: Right free throw line center
+
+            # 15-18: Three-point corners
+            [three_point_corner, 0],             # 15: Left three-point top corner
+            [three_point_corner, self.length],   # 16: Left three-point bottom corner
+            [self.width - three_point_corner, 0],        # 17: Right three-point top corner
+            [self.width - three_point_corner, self.length],  # 18: Right three-point bottom corner
+
+            # 19-22: Three-point arc intersections with paint extension
+            [basket_from_baseline + three_point_arc, half_width - 8],   # 19: Left arc top
+            [basket_from_baseline + three_point_arc, half_width + 8],   # 20: Left arc bottom
+            [self.width - basket_from_baseline - three_point_arc, half_width - 8],  # 21: Right arc top
+            [self.width - basket_from_baseline - three_point_arc, half_width + 8],  # 22: Right arc bottom
+
+            # 23-26: Center line and circle
+            [half_length, 0],                    # 23: Center line top
+            [half_length, self.length],          # 24: Center line bottom
+            [half_length, half_width - center_radius],   # 25: Center circle top
+            [half_length, half_width + center_radius],   # 26: Center circle bottom
+
+            # 27-28: Baseline centers
+            [0, half_width],                     # 27: Left baseline center
+            [self.width, half_width],            # 28: Right baseline center
+
+            # 29-32: Free throw circles
+            [free_throw_line, half_width - ft_circle_radius],   # 29: Left FT circle top
+            [free_throw_line, half_width + ft_circle_radius],   # 30: Left FT circle bottom
+            [self.width - free_throw_line, half_width - ft_circle_radius],  # 31: Right FT circle top
+            [self.width - free_throw_line, half_width + ft_circle_radius],  # 32: Right FT circle bottom
+        ], dtype=np.float32)
+
+        return vertices
+
+    @property
+    def edges(self):
+        """Court line edges for drawing (pairs of vertex indices)."""
+        return [
+            # Court outline
+            (1, 3), (3, 4), (4, 2), (2, 1),
+            # Center line
+            (23, 24),
+            # Left paint
+            (5, 7), (7, 8), (8, 6),
+            # Right paint
+            (10, 12), (12, 13), (13, 11),
+            # Three-point corners
+            (1, 15), (2, 16), (3, 17), (4, 18),
+        ]
+
+
+def get_court_config():
+    """
+    Get basketball court configuration.
+
+    Uses the roboflow sports library if available (feat/basketball branch),
+    otherwise falls back to our custom BasketballCourtConfiguration.
+
+    Install sports library with:
+        pip install git+https://github.com/roboflow/sports.git@feat/basketball
+    """
+    if SPORTS_LIBRARY_AVAILABLE:
+        try:
+            return CourtConfiguration(league=League.NBA, measurement_unit=MeasurementUnit.FEET)
+        except Exception:
+            pass
+    return BasketballCourtConfiguration()
 
 
 def get_court_vertices() -> np.ndarray:
     """
-    Get court keypoint vertices from roboflow sports library.
+    Get court keypoint vertices in real-world coordinates (feet).
     These vertices are in the same order as the keypoint model outputs.
-    Returns vertices in the court's real-world coordinate system.
     """
     config = get_court_config()
-    return np.array(config.vertices, dtype=np.float32)
+    if SPORTS_LIBRARY_AVAILABLE and hasattr(config, 'vertices'):
+        return np.array(config.vertices)
+    return config.vertices
 
 
-def vertices_to_pixels(vertices: np.ndarray, width: int = TACTICAL_WIDTH, height: int = TACTICAL_HEIGHT) -> np.ndarray:
+def get_court_dimensions() -> Tuple[float, float]:
     """
-    Convert court vertices from real-world coordinates to pixel coordinates.
+    Get court dimensions in feet.
 
-    The sports library vertices use a coordinate system where:
-    - X goes from 0 to court_length (left to right)
-    - Y goes from 0 to court_width (top to bottom in image space)
+    Returns:
+        Tuple of (court_length, court_width) in feet.
+        - court_length: 94 feet (baseline to baseline)
+        - court_width: 50 feet (sideline to sideline)
     """
-    config = get_court_config()
-    court_length = config.width   # Full court length
-    court_width = config.length   # Full court width (sideline to sideline)
-
-    scale_x = width / court_length
-    scale_y = height / court_width
-
-    pixels = np.zeros_like(vertices)
-    pixels[:, 0] = vertices[:, 0] * scale_x
-    pixels[:, 1] = vertices[:, 1] * scale_y
-
-    return pixels.astype(np.float32)
+    # Always use NBA standard dimensions regardless of config source
+    return NBA_COURT_LENGTH, NBA_COURT_WIDTH
 
 
 class ViewTransformer:
@@ -105,7 +236,7 @@ class ViewTransformer:
 
 def draw_court(width: int = TACTICAL_WIDTH, height: int = TACTICAL_HEIGHT) -> np.ndarray:
     """
-    Draw an NBA basketball court with BLUE background using sports library config.
+    Draw an NBA basketball court with BLUE background.
 
     Args:
         width: Image width in pixels
@@ -120,13 +251,17 @@ def draw_court(width: int = TACTICAL_WIDTH, height: int = TACTICAL_HEIGHT) -> np
     court = np.ones((height, width, 3), dtype=np.uint8)
     court[:, :] = (180, 100, 50)  # Blue background in BGR
 
-    # Scale factors - config.width is court length, config.length is court width
-    court_length = config.width
-    court_width = config.length
+    # Scale factors: feet to pixels
+    court_length = config.width   # 94 feet
+    court_width = config.length   # 50 feet
     sx = width / court_length
     sy = height / court_width
 
     line_color = (255, 255, 255)  # White lines
+
+    # Helper to convert feet to pixels
+    def to_px(x_feet, y_feet):
+        return int(x_feet * sx), int(y_feet * sy)
 
     # Draw edges from the court configuration
     for edge in config.edges:
@@ -134,48 +269,43 @@ def draw_court(width: int = TACTICAL_WIDTH, height: int = TACTICAL_HEIGHT) -> np
         if start_idx < len(config.vertices) and end_idx < len(config.vertices):
             x1, y1 = config.vertices[start_idx]
             x2, y2 = config.vertices[end_idx]
-            pt1 = (int(x1 * sx), int(y1 * sy))
-            pt2 = (int(x2 * sx), int(y2 * sy))
-            cv2.line(court, pt1, pt2, line_color, 2)
+            cv2.line(court, to_px(x1, y1), to_px(x2, y2), line_color, 2)
 
-    # Draw center circle
-    center_x = court_length / 2
-    center_y = court_width / 2
-    center_radius = 6 * sx  # 6 feet radius
-    cv2.circle(court, (int(center_x * sx), int(center_y * sy)), int(center_radius), line_color, 2)
+    # Court center
+    center_x = court_length / 2  # 47 feet
+    center_y = court_width / 2   # 25 feet
 
-    # Draw free throw circles
-    ft_radius = 6 * sx
-    # Left free throw (19 feet from baseline = 19 ft from left)
-    cv2.circle(court, (int(19 * sx), int(center_y * sy)), int(ft_radius), line_color, 2)
-    # Right free throw (94 - 19 = 75 feet from left)
-    cv2.circle(court, (int(75 * sx), int(center_y * sy)), int(ft_radius), line_color, 2)
+    # Draw center circle (6 feet radius)
+    cv2.circle(court, to_px(center_x, center_y), int(6 * sx), line_color, 2)
 
-    # Draw three-point arcs
-    arc_radius = 23.75 * sx
-    # Left basket at ~5.25 ft from baseline
-    basket_left_x = int(5.25 * sx)
-    # Right basket
-    basket_right_x = int((court_length - 5.25) * sx)
-    basket_y = int(center_y * sy)
+    # Free throw circles (6 feet radius)
+    ft_line = 19.0  # Free throw line is 19 feet from baseline
+    cv2.circle(court, to_px(ft_line, center_y), int(6 * sx), line_color, 2)
+    cv2.circle(court, to_px(court_length - ft_line, center_y), int(6 * sx), line_color, 2)
 
-    # Left arc (facing right)
-    cv2.ellipse(court, (basket_left_x, basket_y), (int(arc_radius), int(arc_radius)),
+    # Basket positions (5.25 feet from baseline)
+    basket_x_left = 5.25
+    basket_x_right = court_length - 5.25
+
+    # Three-point arcs (23.75 feet radius from basket)
+    arc_radius = int(23.75 * sx)
+    # Left arc - opens to the right
+    cv2.ellipse(court, to_px(basket_x_left, center_y), (arc_radius, arc_radius),
                 0, -68, 68, line_color, 2)
-    # Right arc (facing left)
-    cv2.ellipse(court, (basket_right_x, basket_y), (int(arc_radius), int(arc_radius)),
+    # Right arc - opens to the left
+    cv2.ellipse(court, to_px(basket_x_right, center_y), (arc_radius, arc_radius),
                 180, -68, 68, line_color, 2)
 
-    # Draw restricted area arcs (4 feet radius)
-    ra_radius = 4 * sx
-    cv2.ellipse(court, (basket_left_x, basket_y), (int(ra_radius), int(ra_radius)),
+    # Restricted area arcs (4 feet radius)
+    ra_radius = int(4 * sx)
+    cv2.ellipse(court, to_px(basket_x_left, center_y), (ra_radius, ra_radius),
                 0, -90, 90, line_color, 2)
-    cv2.ellipse(court, (basket_right_x, basket_y), (int(ra_radius), int(ra_radius)),
+    cv2.ellipse(court, to_px(basket_x_right, center_y), (ra_radius, ra_radius),
                 180, -90, 90, line_color, 2)
 
-    # Draw baskets
-    cv2.circle(court, (basket_left_x, basket_y), int(0.75 * sx), (0, 128, 255), -1)
-    cv2.circle(court, (basket_right_x, basket_y), int(0.75 * sx), (0, 128, 255), -1)
+    # Draw baskets (orange circles)
+    cv2.circle(court, to_px(basket_x_left, center_y), int(0.75 * sx), (0, 128, 255), -1)
+    cv2.circle(court, to_px(basket_x_right, center_y), int(0.75 * sx), (0, 128, 255), -1)
 
     return court
 
@@ -538,26 +668,24 @@ class TacticalViewProcessor:
         team_assignments = cache_data['team_assignments']
         court_xy = cache_data['court_xy']
 
-        # Court dimensions
-        court_width = TACTICAL_WIDTH
-        court_height = TACTICAL_HEIGHT
+        # Tactical view dimensions in pixels
+        tactical_width = TACTICAL_WIDTH
+        tactical_height = TACTICAL_HEIGHT
 
-        # Get court config for coordinate conversion
-        config = get_court_config()
-        court_length = config.width   # Full court length in feet
-        court_w = config.length       # Full court width in feet
+        # Get court dimensions in feet
+        court_length, court_width = get_court_dimensions()
 
         # Scale factors: real-world feet to pixels
-        scale_x = court_width / court_length
-        scale_y = court_height / court_w
+        scale_x = tactical_width / court_length
+        scale_y = tactical_height / court_width
 
         # Video writer
         fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        writer = cv2.VideoWriter(output_video, fourcc, fps, (court_width, court_height))
+        writer = cv2.VideoWriter(output_video, fourcc, fps, (tactical_width, tactical_height))
 
         for frame_idx in tqdm(range(total_frames), desc="Rendering"):
             # Draw court
-            court = draw_court(court_width, court_height)
+            court = draw_court(tactical_width, tactical_height)
 
             # Draw players
             positions = court_xy[frame_idx]
@@ -573,7 +701,7 @@ class TacticalViewProcessor:
                 py = int(real_y * scale_y)
 
                 # Skip if outside court bounds
-                if px < 0 or px >= court_width or py < 0 or py >= court_height:
+                if px < 0 or px >= tactical_width or py < 0 or py >= tactical_height:
                     continue
 
                 # Get team color
@@ -644,10 +772,8 @@ class TacticalView:
         self._last_transformer: Optional[ViewTransformer] = None
         self.vertices = get_court_vertices()
 
-        # Get court config for coordinate conversion
-        config = get_court_config()
-        self.court_length = config.width
-        self.court_width = config.length
+        # Get court dimensions for coordinate conversion
+        self.court_length, self.court_width = get_court_dimensions()
 
     def _load_model(self):
         """Lazy load keypoint detection model."""
