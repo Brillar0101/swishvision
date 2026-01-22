@@ -16,7 +16,7 @@ from tqdm import tqdm
 
 from sam2.build_sam import build_sam2_video_predictor
 
-from app.ml.player_detector import PlayerDetector
+from app.ml.player_referee_detector import PlayerRefereeDetector
 from app.ml.court_detector import CourtDetector
 from app.ml.team_classifier import TeamClassifier, get_player_crops
 from app.ml.tactical_view import TacticalView, create_combined_view
@@ -256,7 +256,7 @@ class PlayerTracker:
 
         print(f"Using device: {self.device}")
 
-        self.player_detector = PlayerDetector()
+        self.player_detector = PlayerRefereeDetector()
         self.court_detector = CourtDetector()
 
         # Jersey detection components
