@@ -268,10 +268,10 @@ def draw_court(width: int = TACTICAL_WIDTH, height: int = TACTICAL_HEIGHT) -> np
             points.append(to_px(x, y))
         return np.array(points, dtype=np.int32)
 
-    # Colors (BGR format) - matching Roboflow sports library
-    background_color = (139, 190, 224)  # Tan/wood color (BGR for RGB 224, 190, 139)
+    # Colors (BGR format) - blue court style matching portfolio
+    background_color = (180, 120, 60)   # Blue court background
     line_color = (255, 255, 255)        # White lines
-    paint_color = (160, 180, 200)       # Slightly darker paint area
+    paint_color = (160, 100, 50)        # Slightly darker blue for paint area
     rim_color = (0, 128, 255)           # Orange rim
 
     # Create court background
