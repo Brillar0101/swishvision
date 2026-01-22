@@ -293,46 +293,41 @@ def draw_court(width: int = TACTICAL_WIDTH, height: int = TACTICAL_HEIGHT) -> np
     cv2.circle(court, to_px(ft_line, center_y), int(6 * sx), line_color, 2)
     cv2.circle(court, to_px(court_length - ft_line, center_y), int(6 * sx), line_color, 2)
 
-    # Basket positions (5.25 feet from baseline, actually 4ft to backboard + 15in to rim center)
+    # Basket positions (5.25 feet from baseline)
     basket_x_left = 5.25
     basket_x_right = court_length - 5.25
 
-    # Three-point line parameters
-    three_arc_radius = 23.75  # Arc radius from basket center
-    three_corner_dist = 22.0  # Corner three distance from baseline (straight section)
-    corner_three_y = 3.0  # Distance from sideline where corner three ends
+    # Three-point line: 23.75 feet radius semicircle from basket center
+    three_arc_radius = 23.75
 
-    # Calculate the angle where the arc meets the corner three line
-    # The corner three is 22 feet from sideline, arc center is at basket (5.25 ft from baseline)
-    # Arc meets the straight line at y = 3 feet from sideline (top) and y = 47 feet (bottom)
+    # Draw three-point semicircles using polylines for accurate scaling
     import math
-    # Distance from basket to where arc meets corner = sqrt(radius^2 - (center_y - corner_y)^2)
-    arc_to_corner_y = center_y - corner_three_y  # 25 - 3 = 22 feet
-    arc_angle = math.degrees(math.asin(arc_to_corner_y / three_arc_radius))  # ~68 degrees
 
-    # Left three-point line
-    # Straight sections along sidelines
-    cv2.line(court, to_px(0, corner_three_y), to_px(three_corner_dist, corner_three_y), line_color, 2)
-    cv2.line(court, to_px(0, court_width - corner_three_y), to_px(three_corner_dist, court_width - corner_three_y), line_color, 2)
-    # Arc section
-    arc_radius_px = int(three_arc_radius * sx)
-    cv2.ellipse(court, to_px(basket_x_left, center_y), (arc_radius_px, int(three_arc_radius * sy)),
-                0, -arc_angle, arc_angle, line_color, 2)
+    def draw_semicircle(center_x, center_y, radius, start_angle, end_angle, num_points=60):
+        """Draw a semicircle as a polyline for proper scaling."""
+        points = []
+        for i in range(num_points + 1):
+            angle = math.radians(start_angle + (end_angle - start_angle) * i / num_points)
+            x = center_x + radius * math.cos(angle)
+            y = center_y + radius * math.sin(angle)
+            points.append(to_px(x, y))
+        points = np.array(points, dtype=np.int32)
+        cv2.polylines(court, [points], False, line_color, 2)
 
-    # Right three-point line
-    # Straight sections along sidelines
-    cv2.line(court, to_px(court_length, corner_three_y), to_px(court_length - three_corner_dist, corner_three_y), line_color, 2)
-    cv2.line(court, to_px(court_length, court_width - corner_three_y), to_px(court_length - three_corner_dist, court_width - corner_three_y), line_color, 2)
-    # Arc section
-    cv2.ellipse(court, to_px(basket_x_right, center_y), (arc_radius_px, int(three_arc_radius * sy)),
-                180, -arc_angle, arc_angle, line_color, 2)
+    # Left three-point line (semicircle facing right, from -90 to +90 degrees)
+    draw_semicircle(basket_x_left, center_y, three_arc_radius, -90, 90)
 
-    # Restricted area arcs (4 feet radius)
-    ra_radius = int(4 * sx)
-    cv2.ellipse(court, to_px(basket_x_left, center_y), (ra_radius, int(4 * sy)),
-                0, -90, 90, line_color, 2)
-    cv2.ellipse(court, to_px(basket_x_right, center_y), (ra_radius, int(4 * sy)),
-                180, -90, 90, line_color, 2)
+    # Right three-point line (semicircle facing left, from 90 to 270 degrees)
+    draw_semicircle(basket_x_right, center_y, three_arc_radius, 90, 270)
+
+    # Restricted area: 4 feet radius semicircle
+    ra_radius = 4.0
+
+    # Left restricted area
+    draw_semicircle(basket_x_left, center_y, ra_radius, -90, 90)
+
+    # Right restricted area
+    draw_semicircle(basket_x_right, center_y, ra_radius, 90, 270)
 
     # Draw baskets (orange circles)
     cv2.circle(court, to_px(basket_x_left, center_y), int(0.75 * sx), (0, 128, 255), -1)
