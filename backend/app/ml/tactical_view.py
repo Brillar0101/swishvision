@@ -334,13 +334,35 @@ def draw_court(width: int = TACTICAL_WIDTH, height: int = TACTICAL_HEIGHT) -> np
     cv2.circle(court, to_px(ft_line, center_y), int(6 * sx), line_color, 2)
     cv2.circle(court, to_px(court_length - ft_line, center_y), int(6 * sx), line_color, 2)
 
-    # Draw three-point arcs
-    # Left three-point line (semicircle facing right)
-    arc_points = draw_arc(basket_x_left, center_y, three_arc_radius, -90, 90)
+    # Draw three-point lines (arc + corner straight sections)
+    # NBA three-point: 23.75 ft arc radius, corner three is 22 ft from basket
+    # Corner three line is 3 ft from sideline
+    corner_three_y = 3.0  # Distance from sideline
+
+    # Calculate where the arc meets the corner line
+    # Arc center is at basket (5.25 ft from baseline), radius is 23.75 ft
+    # Corner line is at y = 3 ft from sideline
+    # Find x where circle intersects y = 3: x = basket_x + sqrt(r^2 - (center_y - 3)^2)
+    delta_y = center_y - corner_three_y  # 25 - 3 = 22 ft
+    arc_meet_x = basket_x_left + math.sqrt(three_arc_radius**2 - delta_y**2)  # ~14.1 ft
+
+    # Calculate the angle where arc meets corner (for drawing partial arc)
+    arc_angle = math.degrees(math.asin(delta_y / three_arc_radius))  # ~68 degrees
+
+    # Left three-point line
+    # Corner straight sections (parallel to sideline, 3 ft from edge)
+    cv2.line(court, to_px(0, corner_three_y), to_px(arc_meet_x, corner_three_y), line_color, 2)
+    cv2.line(court, to_px(0, court_width_ft - corner_three_y), to_px(arc_meet_x, court_width_ft - corner_three_y), line_color, 2)
+    # Arc section (from corner to corner)
+    arc_points = draw_arc(basket_x_left, center_y, three_arc_radius, -arc_angle, arc_angle)
     cv2.polylines(court, [arc_points], False, line_color, 2)
 
-    # Right three-point line (semicircle facing left)
-    arc_points = draw_arc(basket_x_right, center_y, three_arc_radius, 90, 270)
+    # Right three-point line
+    arc_meet_x_right = court_length - arc_meet_x
+    cv2.line(court, to_px(court_length, corner_three_y), to_px(arc_meet_x_right, corner_three_y), line_color, 2)
+    cv2.line(court, to_px(court_length, court_width_ft - corner_three_y), to_px(arc_meet_x_right, court_width_ft - corner_three_y), line_color, 2)
+    # Arc section
+    arc_points = draw_arc(basket_x_right, center_y, three_arc_radius, 180 - arc_angle, 180 + arc_angle)
     cv2.polylines(court, [arc_points], False, line_color, 2)
 
     # Draw restricted area arcs (4 feet radius)
