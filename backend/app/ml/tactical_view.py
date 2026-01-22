@@ -4,10 +4,11 @@ Tactical View Module for SwishVision.
 Generates smoothed homography-based tactical court view from basketball video.
 Uses ycjdo/4 model for player/referee detection and path smoothing.
 
-Team colors:
-- RED (0, 0, 255) for Team 1
-- GREEN (0, 255, 0) for Team 2
-- BLUE background court
+Team colors (BGR format):
+- Team 0: GREEN (0, 255, 0)
+- Team 1: RED (0, 0, 255)
+- Referees: YELLOW (0, 255, 255)
+- Background: BLUE court
 """
 import cv2
 import pickle
@@ -35,8 +36,8 @@ NBA_COURT_WIDTH = 50.0
 
 # Team colors (BGR format)
 TEAM_COLORS = {
-    0: (0, 0, 255),    # RED for Team 1
-    1: (0, 255, 0),    # GREEN for Team 2
+    0: (0, 255, 0),    # GREEN for Team 1
+    1: (0, 0, 255),    # RED for Team 2
     -1: (0, 255, 255), # YELLOW for referees
 }
 
