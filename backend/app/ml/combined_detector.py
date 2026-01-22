@@ -4,6 +4,7 @@ import numpy as np
 import supervision as sv
 from inference import get_model
 from dotenv import load_dotenv
+from app.ml.court_detector import CourtDetector
 
 load_dotenv()
 
@@ -39,6 +40,10 @@ class CombinedDetector:
         self.rtmdet_person_class_id = 0  # COCO person class
 
         self._load_rtmdet()
+
+        # Court detector for filtering on-court detections
+        self.court_detector = CourtDetector()
+        self._court_hull = None  # Cached court hull
 
         self.colors = {
             "rf_detr_player": (0, 255, 0),      # Green
@@ -83,6 +88,58 @@ class CombinedDetector:
             )
             self._use_mmdet = False
             print("Using YOLOv8x as fallback for person detection")
+
+    def _get_court_hull(self, frame: np.ndarray):
+        """Get or compute the court convex hull for filtering."""
+        if self._court_hull is not None:
+            return self._court_hull
+
+        kp_result = self.court_detector.detect_keypoints(frame)
+
+        if kp_result["keypoints"] is None or kp_result["count"] < 4:
+            return None
+
+        keypoints = kp_result["keypoints"]
+        mask = kp_result["mask"]
+        valid_points = keypoints[mask]
+
+        if len(valid_points) < 4:
+            return None
+
+        hull = cv2.convexHull(valid_points.astype(np.float32))
+
+        # Expand hull slightly to include players near edges
+        center = np.mean(hull.reshape(-1, 2), axis=0)
+        expanded_hull = []
+        for point in hull.reshape(-1, 2):
+            direction = point - center
+            expanded_point = point + direction * 0.05
+            expanded_hull.append(expanded_point)
+        self._court_hull = np.array(expanded_hull, dtype=np.float32).reshape(-1, 1, 2)
+
+        return self._court_hull
+
+    def filter_on_court(self, detections: sv.Detections, frame: np.ndarray) -> sv.Detections:
+        """Filter detections to only include those on the court."""
+        if len(detections) == 0:
+            return detections
+
+        hull = self._get_court_hull(frame)
+        if hull is None:
+            return detections
+
+        on_court_mask = []
+        for i in range(len(detections)):
+            x1, y1, x2, y2 = detections.xyxy[i]
+            # Use foot position (bottom center of bbox)
+            foot_x = (x1 + x2) / 2
+            foot_y = y2
+
+            result = cv2.pointPolygonTest(hull, (foot_x, foot_y), False)
+            on_court = result >= 0
+            on_court_mask.append(on_court)
+
+        return detections[np.array(on_court_mask)]
 
     def detect_rf_detr(self, frame: np.ndarray) -> sv.Detections:
         """Run RF-DETR basketball detection."""
@@ -182,10 +239,16 @@ class CombinedDetector:
 
         return merged
 
-    def detect(self, frame: np.ndarray) -> sv.Detections:
+    def detect(self, frame: np.ndarray, filter_court: bool = True) -> sv.Detections:
         """Run both detectors and merge results."""
         rf_detr_dets = self.detect_rf_detr(frame)
         rtmdet_dets = self.detect_rtmdet(frame)
+
+        # Filter both to on-court only for fair comparison
+        if filter_court:
+            rf_detr_dets = self.filter_on_court(rf_detr_dets, frame)
+            rtmdet_dets = self.filter_on_court(rtmdet_dets, frame)
+
         return self.merge_detections(rf_detr_dets, rtmdet_dets)
 
     def draw_detections(self, frame: np.ndarray, detections: sv.Detections,
@@ -252,7 +315,8 @@ class CombinedDetector:
         return comparison
 
     def process_frames(self, video_path: str, output_dir: str,
-                       frame_indices: list = None, num_frames: int = 3) -> dict:
+                       frame_indices: list = None, num_frames: int = 3,
+                       filter_court: bool = True) -> dict:
         """Process specific frames and save comparison images."""
         os.makedirs(output_dir, exist_ok=True)
 
@@ -275,6 +339,12 @@ class CombinedDetector:
             # Run both detectors
             rf_detr_dets = self.detect_rf_detr(frame)
             rtmdet_dets = self.detect_rtmdet(frame)
+
+            # Filter to on-court only for fair comparison
+            if filter_court:
+                rf_detr_dets = self.filter_on_court(rf_detr_dets, frame)
+                rtmdet_dets = self.filter_on_court(rtmdet_dets, frame)
+
             merged_dets = self.merge_detections(rf_detr_dets, rtmdet_dets)
 
             # Save individual detection frame
@@ -313,20 +383,132 @@ class CombinedDetector:
             "frames": results
         }
 
+    def process_video(self, video_path: str, output_dir: str,
+                      filter_court: bool = True, max_frames: int = None) -> dict:
+        """Process entire video and output detection video."""
+        os.makedirs(output_dir, exist_ok=True)
+
+        cap = cv2.VideoCapture(video_path)
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+        if max_frames:
+            total_frames = min(total_frames, max_frames)
+
+        # Video writers for each output
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        merged_video = cv2.VideoWriter(
+            os.path.join(output_dir, "combined_detection.mp4"),
+            fourcc, fps, (width, height)
+        )
+        comparison_video = cv2.VideoWriter(
+            os.path.join(output_dir, "comparison_detection.mp4"),
+            fourcc, fps, (width * 3, height)  # 3 panels side by side
+        )
+
+        stats = {
+            "rf_detr_total": 0,
+            "rtmdet_total": 0,
+            "rtmdet_added_total": 0,
+            "frames_processed": 0
+        }
+
+        from tqdm import tqdm
+        for frame_idx in tqdm(range(total_frames), desc="Processing video"):
+            ret, frame = cap.read()
+            if not ret:
+                break
+
+            # Run both detectors
+            rf_detr_dets = self.detect_rf_detr(frame)
+            rtmdet_dets = self.detect_rtmdet(frame)
+
+            # Filter to on-court only
+            if filter_court:
+                rf_detr_dets = self.filter_on_court(rf_detr_dets, frame)
+                rtmdet_dets = self.filter_on_court(rtmdet_dets, frame)
+
+            merged_dets = self.merge_detections(rf_detr_dets, rtmdet_dets)
+
+            # Draw and write frames
+            annotated = self.draw_detections(frame, merged_dets)
+            merged_video.write(annotated)
+
+            comparison = self.draw_comparison(frame, rf_detr_dets, rtmdet_dets, merged_dets)
+            comparison_video.write(comparison)
+
+            # Update stats
+            sources = merged_dets.data.get("source", np.zeros(len(merged_dets))) if merged_dets.data else np.zeros(len(merged_dets))
+            stats["rf_detr_total"] += len(rf_detr_dets)
+            stats["rtmdet_total"] += len(rtmdet_dets)
+            stats["rtmdet_added_total"] += int(np.sum(sources == 1))
+            stats["frames_processed"] += 1
+
+        cap.release()
+        merged_video.release()
+        comparison_video.release()
+
+        print(f"\n=== Video Processing Complete ===")
+        print(f"Frames processed: {stats['frames_processed']}")
+        print(f"Avg RF-DETR detections/frame: {stats['rf_detr_total'] / stats['frames_processed']:.1f}")
+        print(f"Avg RTMDet detections/frame: {stats['rtmdet_total'] / stats['frames_processed']:.1f}")
+        print(f"Avg players added by RTMDet: {stats['rtmdet_added_total'] / stats['frames_processed']:.1f}")
+
+        return {
+            "video_path": video_path,
+            "output_dir": output_dir,
+            "merged_video": os.path.join(output_dir, "combined_detection.mp4"),
+            "comparison_video": os.path.join(output_dir, "comparison_detection.mp4"),
+            "stats": stats
+        }
+
 
 if __name__ == "__main__":
     import sys
+    import argparse
 
-    video_path = sys.argv[1] if len(sys.argv) > 1 else "../test_videos/test_game.mp4"
-    output_dir = sys.argv[2] if len(sys.argv) > 2 else "output/combined_detection"
+    parser = argparse.ArgumentParser(description="Combined RF-DETR + RTMDet detector")
+    parser.add_argument("video_path", nargs="?", default="../test_videos/test_game.mp4",
+                        help="Path to input video")
+    parser.add_argument("output_dir", nargs="?", default="output/combined_detection",
+                        help="Output directory")
+    parser.add_argument("--video", action="store_true",
+                        help="Process entire video instead of just 3 frames")
+    parser.add_argument("--frames", type=int, default=3,
+                        help="Number of frames to sample (default: 3)")
+    parser.add_argument("--max-frames", type=int, default=None,
+                        help="Max frames to process in video mode")
+    parser.add_argument("--no-court-filter", action="store_true",
+                        help="Disable court filtering")
+
+    args = parser.parse_args()
 
     detector = CombinedDetector()
-    results = detector.process_frames(video_path, output_dir, num_frames=3)
 
-    print("\n=== Results ===")
-    for frame in results["frames"]:
-        print(f"Frame {frame['frame_index']}:")
-        print(f"  RF-DETR: {frame['rf_detr_detections']}")
-        print(f"  RTMDet: {frame['rtmdet_detections']}")
-        print(f"  Combined: {frame['merged_total']} (+{frame['rtmdet_added']} from RTMDet)")
-        print(f"  Saved: {frame['comparison_path']}")
+    if args.video:
+        # Process entire video
+        results = detector.process_video(
+            args.video_path,
+            args.output_dir,
+            filter_court=not args.no_court_filter,
+            max_frames=args.max_frames
+        )
+        print(f"\nOutput videos saved to: {args.output_dir}")
+    else:
+        # Process sample frames
+        results = detector.process_frames(
+            args.video_path,
+            args.output_dir,
+            num_frames=args.frames,
+            filter_court=not args.no_court_filter
+        )
+
+        print("\n=== Results ===")
+        for frame in results["frames"]:
+            print(f"Frame {frame['frame_index']}:")
+            print(f"  RF-DETR: {frame['rf_detr_detections']}")
+            print(f"  RTMDet: {frame['rtmdet_detections']}")
+            print(f"  Combined: {frame['merged_total']} (+{frame['rtmdet_added']} from RTMDet)")
+            print(f"  Saved: {frame['comparison_path']}")
