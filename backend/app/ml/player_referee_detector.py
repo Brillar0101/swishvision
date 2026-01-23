@@ -1,8 +1,8 @@
 """
-Player and Referee Detection using basketball-player-detection-3-ycjdo/4 model.
+Player and Referee Detection using fine-tuned RF-DETR model.
 
-This module detects only players and referees (classes 3, 4, 5, 6, 7, 8)
-for use with SAM2 segmentation pipeline.
+This module detects players and referees using a locally trained RF-DETR model,
+eliminating the need for Roboflow API calls during inference.
 
 Player classes:
 - 3: player
@@ -18,16 +18,15 @@ Referee class:
 import os
 import numpy as np
 import supervision as sv
-from inference import get_model
-from dotenv import load_dotenv
 from pathlib import Path
 
-load_dotenv(override=True)
+# Model paths
+MODEL_DIR = Path(__file__).parent.parent.parent / "models"
+RFDETR_CHECKPOINT = MODEL_DIR / "rfdetr_basketball.pth"
 
-# Model configuration
-PLAYER_DETECTION_MODEL_ID = "basketball-player-detection-3-ycjdo/4"
-PLAYER_DETECTION_MODEL_CONFIDENCE = 0.4
-PLAYER_DETECTION_MODEL_IOU_THRESHOLD = 0.9
+# Detection settings
+DETECTION_CONFIDENCE = 0.4
+DETECTION_IOU_THRESHOLD = 0.5
 
 # Player class IDs (all player variants)
 PLAYER_CLASS_IDS = [3, 4, 5, 6, 7]  # player, player-in-possession, player-jump-shot, player-layup-dunk, player-shot-block
@@ -37,12 +36,6 @@ REFEREE_CLASS_IDS = [8]
 
 # All classes we want to detect
 TARGET_CLASS_IDS = PLAYER_CLASS_IDS + REFEREE_CLASS_IDS
-
-# Color palette - blue for players, cyan for referees
-COLOR = sv.ColorPalette.from_hex([
-    "#3399ff",  # Blue - player
-    "#66ffff",  # Cyan - referee
-])
 
 # Class names
 CLASS_NAMES = {
@@ -57,18 +50,34 @@ CLASS_NAMES = {
 
 class PlayerRefereeDetector:
     """
-    Detects players and referees using the ycjdo/4 basketball model.
+    Detects players and referees using fine-tuned RF-DETR model.
     Designed to feed bounding boxes to SAM2 for segmentation.
     """
 
-    def __init__(self, confidence: float = PLAYER_DETECTION_MODEL_CONFIDENCE,
-                 iou_threshold: float = PLAYER_DETECTION_MODEL_IOU_THRESHOLD):
-        self.model = get_model(
-            model_id=PLAYER_DETECTION_MODEL_ID,
-            api_key=os.getenv("ROBOFLOW_API_KEY")
-        )
+    def __init__(self, confidence: float = DETECTION_CONFIDENCE,
+                 iou_threshold: float = DETECTION_IOU_THRESHOLD,
+                 checkpoint_path: str = None):
+        """
+        Initialize the detector.
+
+        Args:
+            confidence: Detection confidence threshold
+            iou_threshold: NMS IoU threshold
+            checkpoint_path: Path to RF-DETR checkpoint (uses default if None)
+        """
         self.confidence = confidence
         self.iou_threshold = iou_threshold
+        self.model = None
+        self._use_rfdetr = False
+
+        # Determine which checkpoint to use
+        if checkpoint_path:
+            self.checkpoint_path = Path(checkpoint_path)
+        else:
+            self.checkpoint_path = RFDETR_CHECKPOINT
+
+        # Try to load RF-DETR model
+        self._load_model()
 
         # Tracker for persistent IDs
         self.tracker = sv.ByteTrack(
@@ -83,6 +92,43 @@ class PlayerRefereeDetector:
         self.box_annotator = sv.BoxAnnotator(thickness=2)
         self.label_annotator = sv.LabelAnnotator(text_color=sv.Color.BLACK)
 
+    def _load_model(self):
+        """Load the RF-DETR model or fall back to Roboflow API."""
+        if self.checkpoint_path.exists():
+            try:
+                from rfdetr import RFDETRBase
+                self.model = RFDETRBase()
+                self.model.load(str(self.checkpoint_path))
+                self._use_rfdetr = True
+                print(f"Loaded RF-DETR model from: {self.checkpoint_path}")
+            except ImportError:
+                print("Warning: rfdetr package not installed. Falling back to Roboflow API.")
+                self._load_roboflow_model()
+            except Exception as e:
+                print(f"Warning: Failed to load RF-DETR model: {e}. Falling back to Roboflow API.")
+                self._load_roboflow_model()
+        else:
+            print(f"RF-DETR checkpoint not found at: {self.checkpoint_path}")
+            self._load_roboflow_model()
+
+    def _load_roboflow_model(self):
+        """Fall back to Roboflow API model."""
+        from dotenv import load_dotenv
+        from inference import get_model
+
+        load_dotenv(override=True)
+
+        api_key = os.getenv("ROBOFLOW_API_KEY")
+        if not api_key:
+            raise ValueError("ROBOFLOW_API_KEY not set and RF-DETR model not available")
+
+        self.model = get_model(
+            model_id="basketball-player-detection-3-ycjdo/4",
+            api_key=api_key
+        )
+        self._use_rfdetr = False
+        print("Using Roboflow API for detection")
+
     def detect(self, frame: np.ndarray) -> sv.Detections:
         """
         Detect players and referees in a frame.
@@ -90,12 +136,18 @@ class PlayerRefereeDetector:
         Returns:
             sv.Detections with only player and referee detections
         """
-        result = self.model.infer(
-            frame,
-            confidence=self.confidence,
-            iou_threshold=self.iou_threshold
-        )[0]
-        detections = sv.Detections.from_inference(result)
+        if self._use_rfdetr:
+            # RF-DETR inference
+            detections = self.model.predict(frame, threshold=self.confidence)
+            detections = sv.Detections.from_transformers(detections)
+        else:
+            # Roboflow API inference
+            result = self.model.infer(
+                frame,
+                confidence=self.confidence,
+                iou_threshold=self.iou_threshold
+            )[0]
+            detections = sv.Detections.from_inference(result)
 
         # Filter to only players and referees
         if len(detections) > 0:
@@ -180,7 +232,6 @@ def process_video(source_video_path: str, output_dir: str = None) -> dict:
         target_video_path = source_path.parent / f"{source_path.stem}-players-referees.mp4"
 
     detector = PlayerRefereeDetector()
-    print(f"Model {PLAYER_DETECTION_MODEL_ID} loaded successfully.")
     print(f"Detecting: players (classes 3-7) and referees (class 8)")
 
     def callback(frame: np.ndarray, index: int) -> np.ndarray:
@@ -214,6 +265,8 @@ if __name__ == "__main__":
                         help="Path to input video")
     parser.add_argument("output_dir", nargs="?", default="output/player_referee_detection",
                         help="Output directory")
+    parser.add_argument("--checkpoint", type=str, default=None,
+                        help="Path to RF-DETR checkpoint")
 
     args = parser.parse_args()
 
