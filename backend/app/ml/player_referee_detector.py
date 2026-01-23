@@ -97,8 +97,8 @@ class PlayerRefereeDetector:
         if self.checkpoint_path.exists():
             try:
                 from rfdetr import RFDETRBase
-                self.model = RFDETRBase()
-                self.model.load(str(self.checkpoint_path))
+                # Load model with custom pretrain_weights path
+                self.model = RFDETRBase(pretrain_weights=str(self.checkpoint_path))
                 self._use_rfdetr = True
                 print(f"Loaded RF-DETR model from: {self.checkpoint_path}")
             except ImportError:
@@ -137,9 +137,8 @@ class PlayerRefereeDetector:
             sv.Detections with only player and referee detections
         """
         if self._use_rfdetr:
-            # RF-DETR inference
+            # RF-DETR inference - returns sv.Detections directly
             detections = self.model.predict(frame, threshold=self.confidence)
-            detections = sv.Detections.from_transformers(detections)
         else:
             # Roboflow API inference
             result = self.model.infer(
