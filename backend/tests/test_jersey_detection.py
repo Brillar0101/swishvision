@@ -5,21 +5,23 @@ Uses the Roboflow notebook approach with RF-DETR + SmolVLM2.
 """
 import os
 import sys
+from pathlib import Path
 
 # Add backend to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'backend'))
+backend_path = Path(__file__).parent.parent
+sys.path.insert(0, str(backend_path))
 
 # Load environment variables
 from dotenv import load_dotenv
-load_dotenv(os.path.join(os.path.dirname(__file__), 'backend', '.env'))
+load_dotenv(backend_path / '.env')
 
 from app.ml.player_tracker import PlayerTracker
 
 def main():
     # Use relative paths that work on any machine
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    video_path = os.path.join(script_dir, "test_videos", "test_game.mp4")
-    output_dir = os.path.join(script_dir, "outputs", "jersey_test")
+    project_root = backend_path.parent
+    video_path = project_root / "test_videos" / "test_game.mp4"
+    output_dir = backend_path / "training" / "outputs" / "jersey_test"
 
     print("=" * 60)
     print("SwishVision - Jersey Detection Test")
@@ -38,15 +40,15 @@ def main():
 
     # Initialize tracker with jersey detection enabled
     tracker = PlayerTracker(
-        sam2_checkpoint="checkpoints/sam2.1_hiera_large.pt",
+        sam2_checkpoint=str(backend_path / "checkpoints" / "sam2.1_hiera_large.pt"),
         sam2_config="sam2.1_hiera_l",
         enable_jersey_detection=True,
     )
 
     # Process video
     result = tracker.process_video_with_tracking(
-        video_path=video_path,
-        output_dir=output_dir,
+        video_path=str(video_path),
+        output_dir=str(output_dir),
         max_seconds=15.0,  # Process first 15 seconds
         team_names=("Indiana Pacers", "Oklahoma City Thunder"),
         jersey_ocr_interval=5,  # Run OCR every 5 frames

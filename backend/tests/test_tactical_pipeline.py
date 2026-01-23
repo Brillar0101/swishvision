@@ -9,11 +9,15 @@ This script:
 5. Generates a tactical view video
 """
 import os
+import sys
 import cv2
 import numpy as np
 from pathlib import Path
 from dotenv import load_dotenv
 from collections import defaultdict
+
+# Add parent directory to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent / "app" / "ml"))
 
 load_dotenv(override=True)
 
@@ -24,7 +28,7 @@ from path_smoothing import smooth_tactical_positions
 
 # Constants
 WARMUP_FRAMES = 30  # Frames to collect for team classifier training
-OUTPUT_DIR = Path("output/tactical_test")
+OUTPUT_DIR = Path(__file__).parent.parent / "training" / "outputs" / "tactical_test"
 
 
 def process_video_with_tactical_view(
@@ -224,7 +228,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Test tactical view pipeline")
     parser.add_argument("video_path", nargs="?",
-                        default="../test_videos/test_game.mp4",
+                        default="../../test_videos/test_game.mp4",
                         help="Path to input video")
     parser.add_argument("--max-frames", type=int, default=None,
                         help="Max frames to process (for testing)")

@@ -19,7 +19,7 @@
 #   # echo 'SLURM_ACCOUNT=your_allocation' >> backend/.env
 #
 #   # Then submit with:
-#   source backend/.env && sbatch --account=$SLURM_ACCOUNT backend/app/ml/train_rfdetr_cluster.sh
+#   source backend/.env && sbatch --account=$SLURM_ACCOUNT backend/scripts/train_rfdetr_cluster.sh
 # ============================================================
 
 echo "Starting RF-DETR training job"
@@ -44,7 +44,7 @@ source activate rfdetr
 pip install --quiet rfdetr roboflow python-dotenv torch torchvision
 
 # Navigate to project directory
-cd $HOME/swishvision/backend/app/ml
+cd $HOME/swishvision/backend/scripts
 
 # Load environment variables from .env file
 if [ -f "../.env" ]; then
@@ -53,7 +53,7 @@ if [ -f "../.env" ]; then
 else
     echo "Warning: .env file not found"
     echo "Create one with:"
-    echo "  echo 'ROBOFLOW_API_KEY=your_key' > ../. env"
+    echo "  echo 'ROBOFLOW_API_KEY=your_key' > ../.env"
     echo "  echo 'SLURM_ACCOUNT=your_allocation' >> ../.env"
     exit 1
 fi
@@ -64,7 +64,7 @@ python train_rfdetr.py \
     --epochs 50 \
     --batch-size 32 \
     --image-size 560 \
-    --output output/rfdetr_basketball
+    --output ../training/outputs/rfdetr_basketball
 
 echo "Training complete!"
 date

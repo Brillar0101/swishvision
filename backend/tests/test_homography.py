@@ -6,10 +6,14 @@ Generates images showing:
 3. Combined view
 """
 import os
+import sys
 import cv2
 import numpy as np
 from pathlib import Path
 from dotenv import load_dotenv
+
+# Add parent directory to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent / "app" / "ml"))
 
 load_dotenv(override=True)
 
@@ -17,7 +21,7 @@ from player_referee_detector import PlayerRefereeDetector, PLAYER_CLASS_IDS, REF
 from team_classifier import TeamClassifier, get_player_crops
 from tactical_view import TacticalView, create_combined_view, get_positions_from_detections
 
-OUTPUT_DIR = Path("output/homography_test")
+OUTPUT_DIR = Path(__file__).parent.parent / "training" / "outputs" / "homography_test"
 
 
 def test_homography_on_video(video_path: str, frame_indices: list = None):
@@ -175,7 +179,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Test homography with image outputs")
     parser.add_argument("video_path", nargs="?",
-                        default="../test_videos/test_game.mp4",
+                        default="../../test_videos/test_game.mp4",
                         help="Path to video")
     parser.add_argument("--frames", "-f", type=int, nargs="+",
                         default=[0, 50, 100, 150, 200],

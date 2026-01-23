@@ -206,7 +206,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--output",
         type=str,
-        default="output/rfdetr_basketball",
+        default="../training/outputs/rfdetr_basketball",
         help="Output directory for trained model",
     )
     parser.add_argument(
