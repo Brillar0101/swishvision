@@ -22,7 +22,7 @@ from inference import get_model
 from dotenv import load_dotenv
 from pathlib import Path
 
-load_dotenv()
+load_dotenv(override=True)
 
 # Model configuration
 PLAYER_DETECTION_MODEL_ID = "basketball-player-detection-3-ycjdo/4"
