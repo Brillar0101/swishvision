@@ -298,8 +298,8 @@ def generate_portfolio_videos(
                 label = f"#{tracker_id}"
                 combined_frame = create_player_label(combined_frame, label, (x1, y1, x2, y2), color, use_pil=True)
 
-        # Add tactical overlay
-        combined_frame[y_offset:y_offset+tactical_h, x_offset:x_offset+tactical_w] = tactical_img
+        # Add tactical overlay (use the resized version from Stage 4)
+        combined_frame[y_offset:y_offset+new_h, x_offset:x_offset+new_w] = tactical_resized
 
         add_stage_label(combined_frame, "SwishVision - Full Pipeline")
 
