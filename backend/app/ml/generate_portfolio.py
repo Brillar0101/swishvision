@@ -260,11 +260,22 @@ def generate_portfolio_videos(
             team_colors=team_classifier.team_colors
         )
 
-        # Overlay tactical view
+        # Resize and overlay tactical view to fit on frame
+        scale_factor = 0.35  # Use 35% of frame width
+        target_width = int(width * scale_factor)
         tactical_h, tactical_w = tactical_img.shape[:2]
-        x_offset = width - tactical_w - 20
-        y_offset = height - tactical_h - 20
-        tactical_frame[y_offset:y_offset+tactical_h, x_offset:x_offset+tactical_w] = tactical_img
+        scale = target_width / tactical_w
+        new_w = int(tactical_w * scale)
+        new_h = int(tactical_h * scale)
+        tactical_resized = cv2.resize(tactical_img, (new_w, new_h))
+
+        # Calculate position (bottom-right corner with margin)
+        margin = 20
+        x_offset = width - new_w - margin
+        y_offset = height - new_h - margin
+
+        # Overlay on frame
+        tactical_frame[y_offset:y_offset+new_h, x_offset:x_offset+new_w] = tactical_resized
 
         writers['tactical'].write(tactical_frame)
 
