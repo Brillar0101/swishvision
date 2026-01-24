@@ -173,7 +173,7 @@ def generate_portfolio_videos(
         add_stage_label(detection_frame, "Stage 1: Player Detection (RF-DETR)")
 
         if len(detections) > 0:
-            box_annotator = sv.BoxAnnotator(thickness=3, color=Colors.DETECTION_ACCENT)
+            box_annotator = sv.BoxAnnotator(thickness=3)
             detection_frame = box_annotator.annotate(detection_frame, detections)
 
             # Add professional stats overlay
