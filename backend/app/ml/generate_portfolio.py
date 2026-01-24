@@ -20,6 +20,10 @@ from collections import defaultdict
 from player_referee_detector import PlayerRefereeDetector, PLAYER_CLASS_IDS, REFEREE_CLASS_IDS, CLASS_NAMES
 from team_classifier import TeamClassifier, get_player_crops
 from tactical_view import TacticalView, create_combined_view, get_positions_from_detections
+from ui_config import (
+    Colors, TextSize, VideoConfig,
+    put_text_pil, add_title_bar, create_player_label, add_stats_overlay
+)
 
 
 def generate_portfolio_videos(
@@ -107,14 +111,13 @@ def generate_portfolio_videos(
         minimum_consecutive_frames=1
     )
 
-    # Create video writers
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    # Create high-quality video writers
     writers = {
-        'detection': cv2.VideoWriter(str(output_dir / "stage1_detection.mp4"), fourcc, fps, (width, height)),
-        'tracking': cv2.VideoWriter(str(output_dir / "stage2_tracking.mp4"), fourcc, fps, (width, height)),
-        'teams': cv2.VideoWriter(str(output_dir / "stage3_teams.mp4"), fourcc, fps, (width, height)),
-        'tactical': cv2.VideoWriter(str(output_dir / "stage4_tactical.mp4"), fourcc, fps, (width, height)),
-        'combined': cv2.VideoWriter(str(output_dir / "stage5_combined.mp4"), fourcc, fps, (width, height)),
+        'detection': VideoConfig.create_writer(str(output_dir / "stage1_detection.mp4"), fps, width, height),
+        'tracking': VideoConfig.create_writer(str(output_dir / "stage2_tracking.mp4"), fps, width, height),
+        'teams': VideoConfig.create_writer(str(output_dir / "stage3_teams.mp4"), fps, width, height),
+        'tactical': VideoConfig.create_writer(str(output_dir / "stage4_tactical.mp4"), fps, width, height),
+        'combined': VideoConfig.create_writer(str(output_dir / "stage5_combined.mp4"), fps, width, height),
     }
 
     # Track history for trails
@@ -170,14 +173,12 @@ def generate_portfolio_videos(
         add_stage_label(detection_frame, "Stage 1: Player Detection (RF-DETR)")
 
         if len(detections) > 0:
-            box_annotator = sv.BoxAnnotator(thickness=2)
+            box_annotator = sv.BoxAnnotator(thickness=3, color=Colors.DETECTION_ACCENT)
             detection_frame = box_annotator.annotate(detection_frame, detections)
 
-            # Add count
-            cv2.putText(detection_frame, f"Detected: {len(detections)}", (20, height - 30),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 0), 3)
-            cv2.putText(detection_frame, f"Detected: {len(detections)}", (20, height - 30),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+            # Add professional stats overlay
+            stats = {"Detected Players": len(detections)}
+            detection_frame = add_stats_overlay(detection_frame, stats, position='bottom-left', use_pil=True)
 
         writers['detection'].write(detection_frame)
 
@@ -207,12 +208,10 @@ def generate_portfolio_videos(
                     thickness = max(1, int(3 * j / len(points)))
                     cv2.line(tracking_frame, points[j-1], points[j], bgr, thickness)
 
-                # Draw box and label
-                cv2.rectangle(tracking_frame, (x1, y1), (x2, y2), bgr, 2)
+                # Draw box and professional label
+                cv2.rectangle(tracking_frame, (x1, y1), (x2, y2), bgr, 3)
                 label = f"#{tracker_id}"
-                (lw, lh), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
-                cv2.rectangle(tracking_frame, (x1, y1 - lh - 10), (x1 + lw + 5, y1), bgr, -1)
-                cv2.putText(tracking_frame, label, (x1 + 2, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+                tracking_frame = create_player_label(tracking_frame, label, (x1, y1, x2, y2), bgr, use_pil=True)
 
         writers['tracking'].write(tracking_frame)
 
@@ -231,19 +230,21 @@ def generate_portfolio_videos(
 
                 color = team_classifier.get_team_color(team_id)
 
-                # Draw box
-                cv2.rectangle(teams_frame, (x1, y1), (x2, y2), color, 2)
+                # Draw professional box
+                cv2.rectangle(teams_frame, (x1, y1), (x2, y2), color, 3)
 
                 # Draw team indicator dot
                 cx = (x1 + x2) // 2
                 cv2.circle(teams_frame, (cx, y1 - 15), 12, color, -1)
-                cv2.circle(teams_frame, (cx, y1 - 15), 12, (255, 255, 255), 2)
+                cv2.circle(teams_frame, (cx, y1 - 15), 12, Colors.WHITE, 2)
 
-            # Team counts
-            cv2.putText(teams_frame, f"Team A: {team_counts[0]}  Team B: {team_counts[1]}  Refs: {team_counts[-1]}",
-                       (20, height - 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 0), 3)
-            cv2.putText(teams_frame, f"Team A: {team_counts[0]}  Team B: {team_counts[1]}  Refs: {team_counts[-1]}",
-                       (20, height - 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+            # Professional team counts overlay
+            stats = {
+                "Team A": team_counts[0],
+                "Team B": team_counts[1],
+                "Referees": team_counts[-1]
+            }
+            teams_frame = add_stats_overlay(teams_frame, stats, position='bottom-left', use_pil=True)
 
         writers['teams'].write(teams_frame)
 
@@ -278,13 +279,13 @@ def generate_portfolio_videos(
                 team_id = team_assignments.get(tracker_id, 0)
                 color = team_classifier.get_team_color(team_id)
 
-                cv2.rectangle(combined_frame, (x1, y1), (x2, y2), color, 2)
+                cv2.rectangle(combined_frame, (x1, y1), (x2, y2), color, 3)
 
-                # Label
+                # Professional label
                 class_id = detections.class_id[i]
                 class_name = CLASS_NAMES.get(class_id, "player")
                 label = f"#{tracker_id}"
-                cv2.putText(combined_frame, label, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+                combined_frame = create_player_label(combined_frame, label, (x1, y1, x2, y2), color, use_pil=True)
 
         # Add tactical overlay
         combined_frame[y_offset:y_offset+tactical_h, x_offset:x_offset+tactical_w] = tactical_img
@@ -313,9 +314,8 @@ def generate_portfolio_videos(
 
 
 def add_stage_label(frame, text):
-    """Add stage label to top of frame."""
-    cv2.rectangle(frame, (0, 0), (frame.shape[1], 50), (0, 0, 0), -1)
-    cv2.putText(frame, text, (20, 35), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
+    """Add professional stage label to top of frame."""
+    add_title_bar(frame, text, height=70, bg_color=Colors.OVERLAY_DARK, text_color=Colors.WHITE, use_pil=True)
 
 
 if __name__ == "__main__":
