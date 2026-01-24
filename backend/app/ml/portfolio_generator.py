@@ -18,6 +18,10 @@ import supervision as sv
 
 from app.ml.tactical_view import TacticalView, draw_court, create_combined_view
 from app.ml.team_rosters import TEAM_ROSTERS, TEAM_COLORS, get_player_name
+from app.ml.ui_config import (
+    Colors, TextSize, VideoConfig,
+    put_text_pil, add_title_bar, create_player_label, add_stats_overlay
+)
 
 
 def mask_to_box(mask):
@@ -119,9 +123,8 @@ class PortfolioGenerator:
         return output_paths
 
     def _get_video_writer(self, path: str, fps: float, width: int, height: int):
-        """Create video writer."""
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        return cv2.VideoWriter(path, fourcc, fps, (width, height))
+        """Create high-quality video writer."""
+        return VideoConfig.create_writer(path, fps, width, height, use_h264=True)
 
     def _generate_detection_video(
         self,
@@ -148,10 +151,9 @@ class PortfolioGenerator:
                 detections = detections_per_frame[frame_idx]
                 annotated = box_annotator.annotate(annotated, detections)
 
-                # Add detection count
-                count_text = f"Detected: {len(detections)} players"
-                cv2.putText(annotated, count_text, (20, height - 30),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+                # Add detection count with professional styling
+                stats = {"Detected Players": len(detections)}
+                annotated = add_stats_overlay(annotated, stats, position='bottom-left', use_pil=True)
 
             writer.write(annotated)
 
@@ -195,17 +197,17 @@ class PortfolioGenerator:
                     )
                     cv2.drawContours(annotated, contours, -1, color, 2)
 
-                    # Add object ID
+                    # Add object ID with professional label
                     box = mask_to_box(mask)
                     if box:
                         x1, y1 = int(box[0]), int(box[1])
-                        cv2.putText(annotated, f"ID:{obj_id}", (x1, y1 - 5),
-                                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+                        annotated = put_text_pil(annotated, f"ID:{obj_id}", (x1, y1 - 35),
+                                                font_size=TextSize.LABEL, color=Colors.WHITE,
+                                                bg_color=color, padding=6)
 
-                # Add segment count
-                count_text = f"Segments: {len(video_segments[frame_idx])}"
-                cv2.putText(annotated, count_text, (20, height - 30),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+                # Add segment count with stats overlay
+                stats = {"Player Segments": len(video_segments[frame_idx])}
+                annotated = add_stats_overlay(annotated, stats, position='bottom-left', use_pil=True)
 
             writer.write(annotated)
 
@@ -248,34 +250,28 @@ class PortfolioGenerator:
                     mask_colored[mask_2d] = color
                     annotated = cv2.addWeighted(annotated, 1.0, mask_colored, 0.4, 0)
 
-                    # Draw bounding box
+                    # Draw bounding box with professional styling
                     box = mask_to_box(mask)
                     if box:
                         x1, y1, x2, y2 = int(box[0]), int(box[1]), int(box[2]), int(box[3])
-                        cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
+                        cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 3)
 
-                        # Add team label
+                        # Add team label with professional styling
                         label = team_name
-                        (w, h), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)
-                        cv2.rectangle(annotated, (x1, y1 - h - 10), (x1 + w + 6, y1), color, -1)
-                        cv2.putText(annotated, label, (x1 + 3, y1 - 5),
-                                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+                        annotated = create_player_label(annotated, label, (x1, y1, x2, y2), color, use_pil=True)
 
-                # Add team counts legend
-                y_offset = height - 80
+                # Add team counts with stats overlay
+                stats = {}
                 for team_id, count in team_counts.items():
                     if count > 0:
-                        color = self.team_colors.get(team_id, (128, 128, 128))
                         if team_id == -1:
                             name = "Referees"
                         elif team_id < len(self.team_names):
                             name = self.team_names[team_id]
                         else:
                             name = f"Team {team_id}"
-                        text = f"{name}: {count}"
-                        cv2.putText(annotated, text, (20, y_offset),
-                                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
-                        y_offset += 25
+                        stats[name] = count
+                annotated = add_stats_overlay(annotated, stats, position='bottom-left', use_pil=True)
 
             writer.write(annotated)
 
@@ -321,13 +317,13 @@ class PortfolioGenerator:
                     mask_colored[mask_2d] = color
                     annotated = cv2.addWeighted(annotated, 1.0, mask_colored, 0.4, 0)
 
-                    # Draw bounding box
+                    # Draw bounding box with thicker lines
                     box = mask_to_box(mask)
                     if box:
                         x1, y1, x2, y2 = int(box[0]), int(box[1]), int(box[2]), int(box[3])
-                        cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
+                        cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 3)
 
-                        # Create label with jersey number and player name
+                        # Create professional label with jersey number and player name
                         if jersey_number and player_name:
                             label = f"#{jersey_number} {player_name}"
                         elif jersey_number:
@@ -335,16 +331,15 @@ class PortfolioGenerator:
                         else:
                             label = f"ID:{obj_id}"
 
-                        (w, h), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)
-                        cv2.rectangle(annotated, (x1, y1 - h - 10), (x1 + w + 6, y1), color, -1)
-                        cv2.putText(annotated, label, (x1 + 3, y1 - 5),
-                                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+                        annotated = create_player_label(annotated, label, (x1, y1, x2, y2), color, use_pil=True)
 
-                # Add identification stats
+                # Add identification stats with professional overlay
                 total = len(video_segments[frame_idx])
-                stats_text = f"Identified: {identified_count}/{total} players"
-                cv2.putText(annotated, stats_text, (20, height - 30),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+                stats = {
+                    "Identified Players": f"{identified_count}/{total}",
+                    "Success Rate": f"{int(100 * identified_count / total) if total > 0 else 0}%"
+                }
+                annotated = add_stats_overlay(annotated, stats, position='bottom-left', use_pil=True)
 
             writer.write(annotated)
 
@@ -458,13 +453,13 @@ class PortfolioGenerator:
                     mask_colored[mask_2d] = color
                     annotated = cv2.addWeighted(annotated, 1.0, mask_colored, 0.4, 0)
 
-                    # Draw bounding box
+                    # Draw bounding box with professional styling
                     box = mask_to_box(mask)
                     if box:
                         x1, y1, x2, y2 = int(box[0]), int(box[1]), int(box[2]), int(box[3])
-                        cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
+                        cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 3)
 
-                        # Create label
+                        # Create professional label
                         jersey_number = info.get('jersey_number')
                         player_name = info.get('player_name')
 
@@ -476,10 +471,7 @@ class PortfolioGenerator:
                             team_name = info.get('team_name', '')
                             label = f"#{obj_id} {team_name}"
 
-                        (w, h), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)
-                        cv2.rectangle(annotated, (x1, y1 - h - 10), (x1 + w + 6, y1), color, -1)
-                        cv2.putText(annotated, label, (x1 + 3, y1 - 5),
-                                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+                        annotated = create_player_label(annotated, label, (x1, y1, x2, y2), color, use_pil=True)
 
             # Add tactical view overlay
             if positions:
@@ -504,9 +496,8 @@ class PortfolioGenerator:
         return output_path
 
     def _add_stage_label(self, frame: np.ndarray, text: str):
-        """Add stage label to top of frame."""
-        cv2.rectangle(frame, (0, 0), (frame.shape[1], 40), (0, 0, 0), -1)
-        cv2.putText(frame, text, (15, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+        """Add professional stage label to top of frame."""
+        add_title_bar(frame, text, height=70, bg_color=Colors.OVERLAY_DARK, text_color=Colors.WHITE, use_pil=True)
 
     def _add_tactical_legend(
         self,
@@ -514,23 +505,16 @@ class PortfolioGenerator:
         tracking_info: Dict[int, Dict],
         positions: Dict[int, Tuple[float, float]]
     ):
-        """Add team legend to tactical view."""
-        height = frame.shape[0]
-        y_offset = height - 60
-
+        """Add professional team legend to tactical view."""
+        # Create stats dictionary for overlay
+        stats = {}
         for team_id in [0, 1]:
-            color = self.team_colors.get(team_id, (128, 128, 128))
             name = self.team_names[team_id] if team_id < len(self.team_names) else f"Team {team_id}"
-
-            # Count players on this team currently visible
             count = sum(1 for oid in positions if tracking_info.get(oid, {}).get('team') == team_id)
+            stats[name] = count
 
-            # Draw legend entry
-            cv2.circle(frame, (30, y_offset), 10, color, -1)
-            cv2.circle(frame, (30, y_offset), 10, (255, 255, 255), 2)
-            cv2.putText(frame, f"{name} ({count})", (50, y_offset + 5),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-            y_offset += 25
+        # Add professional stats overlay
+        add_stats_overlay(frame, stats, position='bottom-left', use_pil=True)
 
     def _generate_distinct_colors(self, n: int) -> List[Tuple[int, int, int]]:
         """Generate n visually distinct colors."""

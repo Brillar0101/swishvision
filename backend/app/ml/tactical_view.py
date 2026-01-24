@@ -15,6 +15,14 @@ from dotenv import load_dotenv
 
 import supervision as sv
 
+try:
+    from app.ml.ui_config import Colors, TextSize, put_text_pil
+    UI_CONFIG_AVAILABLE = True
+except ImportError:
+    # Fallback for standalone execution
+    UI_CONFIG_AVAILABLE = False
+    Colors = None
+
 # Try to import from roboflow sports library (basketball branch)
 try:
     from sports import ViewTransformer, MeasurementUnit
@@ -397,14 +405,22 @@ def create_combined_view(
     else:
         y = margin
 
-    # Add border
-    cv2.rectangle(combined, (x - 2, y - 2), (x + ntw + 2, y + nth + 2), (255, 255, 255), 2)
+    # Add professional border
+    border_color = Colors.WHITE if UI_CONFIG_AVAILABLE else (255, 255, 255)
+    cv2.rectangle(combined, (x - 3, y - 3), (x + ntw + 3, y + nth + 3), border_color, 3)
 
     # Overlay tactical view
     combined[y:y + nth, x:x + ntw] = tactical_resized
 
-    # Add label
-    cv2.putText(combined, "TACTICAL VIEW", (x + 5, y - 8),
-               cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
+    # Add professional label
+    if UI_CONFIG_AVAILABLE:
+        combined = put_text_pil(
+            combined, "TACTICAL VIEW", (x + 10, y - 40),
+            font_size=TextSize.SMALL, color=Colors.WHITE,
+            bg_color=Colors.OVERLAY_DARK, padding=8
+        )
+    else:
+        cv2.putText(combined, "TACTICAL VIEW", (x + 5, y - 8),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
 
     return combined
