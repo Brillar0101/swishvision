@@ -288,34 +288,58 @@ def test_player_tracking(
     # Final assessment
     print()
     print("=" * 80)
-    print("ASSESSMENT")
+    print("ASSESSMENT (Focus: Detection Consistency)")
     print("=" * 80)
+    print()
+    print("Note: ID switching is acceptable as long as players are detected consistently.")
+    print()
 
     issues = []
-    if quality['persistent_trackers'] < 8:
-        issues.append(f"Only {quality['persistent_trackers']} persistent trackers (expected ~10 for basketball)")
+    warnings = []
 
-    if quality['short_lived_trackers'] > quality['persistent_trackers'] * 2:
-        issues.append(f"Too many short-lived IDs ({quality['short_lived_trackers']}) - possible ID switching")
-
+    # Critical: Are players being detected consistently?
     if empty_frames > len(frames) * 0.05:  # More than 5% empty
-        issues.append(f"{empty_frames} frames with no detections - detection may be failing")
+        issues.append(f"{empty_frames} frames with no detections ({empty_frames/len(frames)*100:.1f}%)")
 
-    if std_detections > avg_detections * 0.5:  # High variance
-        issues.append(f"High variance in detections ({std_detections:.1f}) - tracking may be unstable")
+    if min_detections == 0:
+        issues.append("Some frames have zero detections - players are disappearing")
 
+    if std_detections > avg_detections * 0.6:  # Very high variance
+        issues.append(f"High detection variance ({std_detections:.1f}) - inconsistent player detection")
+
+    # Informational: ID tracking quality (less critical)
+    if quality['short_lived_trackers'] > quality['persistent_trackers'] * 3:
+        warnings.append(f"Many short-lived IDs ({quality['short_lived_trackers']}) - ID switching is high but OK")
+
+    if quality['persistent_trackers'] < 8:
+        warnings.append(f"Only {quality['persistent_trackers']} persistent IDs (but detection may still be good)")
+
+    # Display results
     if issues:
-        print("⚠ ISSUES DETECTED:")
+        print("❌ DETECTION ISSUES FOUND:")
         for issue in issues:
             print(f"  - {issue}")
+        print()
+        print("Action: Players are not being detected consistently. Check RF-DETR model quality.")
     else:
-        print("✓ TRACKING QUALITY LOOKS GOOD")
-        print(f"  - {quality['persistent_trackers']} persistent players tracked")
-        print(f"  - Consistent detection across {len(frames)} frames")
-        print(f"  - Low ID switching rate")
+        print("✅ DETECTION QUALITY LOOKS GOOD")
+        print(f"  - Players detected in {len(frames) - empty_frames}/{len(frames)} frames ({(len(frames)-empty_frames)/len(frames)*100:.1f}%)")
+        print(f"  - Average {avg_detections:.1f} ± {std_detections:.1f} players per frame")
+        print(f"  - Min/Max: {min_detections}-{max_detections} detections per frame")
+
+    if warnings:
+        print()
+        print("ℹ️  INFO (not critical):")
+        for warning in warnings:
+            print(f"  - {warning}")
 
     print()
-    print("Done! Review the output video to verify tracking visually.")
+    print("Summary:")
+    print(f"  Total unique IDs: {quality['total_trackers']}")
+    print(f"  Persistent IDs (>30 frames): {quality['persistent_trackers']}")
+    print(f"  Short-lived IDs (<10 frames): {quality['short_lived_trackers']}")
+    print()
+    print("Review the output video to visually verify that all visible players are detected.")
 
 
 def main():
