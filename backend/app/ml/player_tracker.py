@@ -3,6 +3,8 @@ Player tracking using SAM2 for video segmentation.
 Includes team classification, jersey number detection, and tactical view.
 
 Based on Roboflow's basketball AI notebook implementation.
+
+REFACTORED VERSION: Extracted pipeline stages into separate methods for better maintainability.
 """
 import os
 import cv2
@@ -297,6 +299,300 @@ class PlayerTracker:
         self.number_validator = ConsecutiveValueTracker(n_consecutive=3)
         self.team_validator = ConsecutiveValueTracker(n_consecutive=1)
 
+    # ============================================================================
+    # Extracted Stage Methods (Refactored from process_video_with_tracking)
+    # ============================================================================
+
+    def _extract_frames(
+        self,
+        video_path: str,
+        frames_dir: str,
+        checkpoint: PipelineCheckpoint,
+        max_seconds: Optional[float],
+        resume: bool
+    ) -> Tuple[List[np.ndarray], float, int, int]:
+        """
+        Extract frames from video and cache to disk.
+
+        Returns:
+            (frames, fps, width, height)
+        """
+        if resume and checkpoint.is_stage_complete('frames_extracted'):
+            print("Extracting frames... [CACHED]")
+            fps = checkpoint.get_metadata('fps')
+            width = checkpoint.get_metadata('width')
+            height = checkpoint.get_metadata('height')
+            frame_count = checkpoint.get_metadata('frame_count')
+
+            frames = []
+            for idx in range(frame_count):
+                frame_path = os.path.join(frames_dir, f"{idx:05d}.jpg")
+                if os.path.exists(frame_path):
+                    frames.append(cv2.imread(frame_path))
+            print(f"  Loaded {len(frames)} frames from cache")
+        else:
+            print("Extracting frames...")
+            cap = cv2.VideoCapture(video_path)
+            if not cap.isOpened():
+                raise ValueError(f"Could not open video file: {video_path}")
+
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            if fps == 0:
+                fps = 30.0
+                print(f"  Warning: Could not read FPS, defaulting to {fps}")
+            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+            frames = []
+            while True:
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                frames.append(frame)
+            cap.release()
+
+            if max_seconds is not None:
+                max_frames = int(fps * max_seconds)
+                if len(frames) > max_frames:
+                    frames = frames[:max_frames]
+
+            frame_count = len(frames)
+            print(f"Loaded {frame_count} frames ({frame_count/fps:.1f}s)")
+
+            print("Saving frames to disk...")
+            for idx, frame in tqdm(enumerate(frames), total=len(frames), desc="Saving frames"):
+                cv2.imwrite(os.path.join(frames_dir, f"{idx:05d}.jpg"), frame)
+
+            checkpoint.save_metadata('fps', fps)
+            checkpoint.save_metadata('width', width)
+            checkpoint.save_metadata('height', height)
+            checkpoint.save_metadata('frame_count', frame_count)
+            checkpoint.mark_stage_complete('frames_extracted')
+
+        return frames, fps, width, height
+
+    def _collect_player_crops(
+        self,
+        frames: List[np.ndarray],
+        checkpoint: PipelineCheckpoint,
+        resume: bool
+    ) -> List[np.ndarray]:
+        """
+        Collect player crops for team classifier training.
+
+        Returns:
+            List of player crop images
+        """
+        if resume and checkpoint.is_stage_complete('crops_collected'):
+            print("Collecting player crops... [CACHED]")
+            all_crops = checkpoint.load_data('crops', [])
+            print(f"  Loaded {len(all_crops)} crops from cache")
+        else:
+            print("Collecting player crops...")
+            all_crops = []
+            crop_indices = list(range(0, len(frames), TEAM_SAMPLING_STRIDE))
+            for i in tqdm(crop_indices, desc="Collecting crops"):
+                sv_detections = self.player_detector.detect(frames[i])
+                players = sv_detections[np.isin(sv_detections.class_id, PLAYER_CLASS_IDS)]
+                if len(players) > 0:
+                    crops = get_player_crops(frames[i], players, scale_factor=TEAM_CROP_SCALE_FACTOR)
+                    all_crops.extend(crops)
+            print(f"  Collected {len(all_crops)} crops")
+            checkpoint.save_data('crops', all_crops)
+            checkpoint.mark_stage_complete('crops_collected')
+
+        return all_crops
+
+    def _train_team_classifier(
+        self,
+        all_crops: List[np.ndarray],
+        team_names: Tuple[str, str],
+        checkpoint: PipelineCheckpoint,
+        resume: bool
+    ) -> TeamClassifier:
+        """
+        Train team classifier using K-means on player crops.
+
+        Returns:
+            Trained TeamClassifier instance
+        """
+        tc_device = "cuda" if self.device.type == "cuda" else "cpu"
+        team_classifier = TeamClassifier(n_teams=2, device=tc_device)
+
+        if resume and checkpoint.is_stage_complete('team_classifier_trained'):
+            print("Training team classifier... [CACHED]")
+            tc_data = checkpoint.load_data('team_classifier')
+            if tc_data:
+                team_classifier._kmeans = tc_data.get('_kmeans')
+                team_classifier.is_fitted = tc_data.get('is_fitted', False)
+                print(f"  Loaded team classifier from cache (fitted={team_classifier.is_fitted})")
+        else:
+            print("Training team classifier...")
+            if len(all_crops) >= 2:
+                team_classifier.fit(all_crops)
+            checkpoint.save_data('team_classifier', {
+                '_kmeans': team_classifier._kmeans,
+                'is_fitted': team_classifier.is_fitted,
+            })
+            checkpoint.mark_stage_complete('team_classifier_trained')
+
+        team_classifier.team_names = {0: team_names[0], 1: team_names[1]}
+        return team_classifier
+
+    def _detect_court(
+        self,
+        frame: np.ndarray,
+        height: int,
+        width: int
+    ) -> np.ndarray:
+        """
+        Detect court keypoints and create court mask.
+
+        Returns:
+            Court mask (uint8 array)
+        """
+        print("Detecting court...")
+        court_result = self.court_detector.detect_keypoints(frame)
+        print(f"  Court keypoints: {court_result['count'] if court_result else 0}")
+
+        court_mask = np.zeros((height, width), dtype=np.uint8)
+        court_mask[
+            int(height * COURT_MASK_Y_MIN_RATIO):int(height * COURT_MASK_Y_MAX_RATIO),
+            :
+        ] = 255
+
+        return court_mask
+
+    def _init_jersey_detection(self):
+        """Initialize jersey detection models (lazy loading)."""
+        if self._jersey_detector is not None:
+            return True
+
+        if not self.enable_jersey_detection:
+            return False
+
+        try:
+            from inference import get_model
+
+            print("Loading jersey detection models...")
+            self._jersey_detector = get_model(model_id="basketball-player-detection-3-ycjdo/4")
+            self._jersey_ocr_model = get_model(model_id="basketball-jersey-numbers-ocr/3")
+            print("Jersey detection models loaded successfully")
+            return True
+        except Exception as e:
+            print(f"Failed to load jersey detection models: {e}")
+            print("Jersey detection will be disabled")
+            self.enable_jersey_detection = False
+            return False
+
+    def _detect_jersey_numbers(
+        self,
+        frame: np.ndarray,
+        player_masks: Dict[int, np.ndarray],
+        player_boxes: Dict[int, List[float]],
+    ) -> Dict[int, str]:
+        """
+        Detect and recognize jersey numbers for players.
+
+        Uses IoS (Intersection over Smaller Area) to match number
+        detections to player masks.
+        """
+        if not self._init_jersey_detection():
+            return {}
+
+        frame_h, frame_w = frame.shape[:2]
+
+        # Detect number bounding boxes
+        result = self._jersey_detector.infer(
+            frame,
+            confidence=DETECTION_CONFIDENCE,
+            iou_threshold=DETECTION_IOU_THRESHOLD
+        )[0]
+        detections = sv.Detections.from_inference(result)
+        number_detections = detections[detections.class_id == NUMBER_CLASS_ID]
+
+        if len(number_detections) == 0:
+            return {}
+
+        # Convert to masks for IoS calculation
+        number_masks = sv.xyxy_to_mask(
+            boxes=number_detections.xyxy,
+            resolution_wh=(frame_w, frame_h)
+        )
+
+        # Build player mask array
+        player_ids = list(player_masks.keys())
+        if not player_ids:
+            return {}
+
+        player_mask_array = np.array([
+            player_masks[pid].squeeze() for pid in player_ids
+        ])
+
+        # Calculate IoS
+        try:
+            iou_matrix = sv.mask_iou_batch(
+                masks_true=player_mask_array,
+                masks_detection=number_masks,
+                overlap_metric=sv.OverlapMetric.IOS
+            )
+        except Exception:
+            return {}
+
+        # Match and recognize
+        matches = {}
+        for player_idx, player_id in enumerate(player_ids):
+            for number_idx in range(len(number_masks)):
+                if iou_matrix[player_idx, number_idx] >= NUMBER_IOS_THRESHOLD:
+                    # Crop and recognize
+                    box = number_detections.xyxy[number_idx]
+                    padded = sv.pad_boxes(xyxy=np.array([box]), px=NUMBER_PADDING_PX, py=NUMBER_PADDING_PX)[0]
+                    clipped = sv.clip_boxes(xyxy=np.array([padded]), resolution_wh=(frame_w, frame_h))[0]
+
+                    try:
+                        crop = sv.crop_image(frame, clipped)
+                        crop_resized = sv.resize_image(crop, resolution_wh=(224, 224))
+                        result = self._jersey_ocr_model.predict(crop_resized, "Read the number.")[0]
+
+                        if result and result.strip().isdigit():
+                            matches[player_id] = result.strip()
+                    except Exception:
+                        pass
+                    break
+
+        return matches
+
+    def _match_detections_to_existing(self, new_detections, existing_boxes, iou_threshold=0.3):
+        """Match new detections to existing tracked objects by IoU."""
+        if not existing_boxes:
+            return [], new_detections
+
+        matched, unmatched = [], []
+        existing_ids = list(existing_boxes.keys())
+        existing_box_list = [existing_boxes[eid] for eid in existing_ids]
+
+        for det in new_detections:
+            det_box = det['box']
+            best_iou, best_match_id = 0, None
+
+            for eid, ebox in zip(existing_ids, existing_box_list):
+                iou = compute_iou(det_box, ebox)
+                if iou > best_iou:
+                    best_iou = iou
+                    best_match_id = eid
+
+            if best_iou >= iou_threshold:
+                det['matched_id'] = best_match_id
+                matched.append(det)
+            else:
+                unmatched.append(det)
+
+        return matched, unmatched
+
+    # ============================================================================
+    # Visualization and Output Methods (kept from original)
+    # ============================================================================
+
     def _generate_portfolio_frames(
         self,
         frames: List[np.ndarray],
@@ -481,7 +777,7 @@ class PlayerTracker:
             stages_to_generate = [1, 2, 3, 4, 5, 6]
 
         stage_videos = {}
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        fourcc = cv2.VideoWriter_fourcc(*VIDEO_CODEC)
         frame_count = len(frames)
 
         # Stage 1: Raw video
@@ -702,130 +998,9 @@ class PlayerTracker:
             colors.append(tuple(int(c) for c in bgr))
         return colors if colors else [(0, 255, 0)]
 
-    def _init_jersey_detection(self):
-        """Initialize jersey detection models (lazy loading)."""
-        if self._jersey_detector is not None:
-            return True
-
-        if not self.enable_jersey_detection:
-            return False
-
-        try:
-            from inference import get_model
-
-            print("Loading jersey detection models...")
-            self._jersey_detector = get_model(model_id="basketball-player-detection-3-ycjdo/4")
-            self._jersey_ocr_model = get_model(model_id="basketball-jersey-numbers-ocr/3")
-            print("Jersey detection models loaded successfully")
-            return True
-        except Exception as e:
-            print(f"Failed to load jersey detection models: {e}")
-            print("Jersey detection will be disabled")
-            self.enable_jersey_detection = False
-            return False
-
-    def _detect_jersey_numbers(
-        self,
-        frame: np.ndarray,
-        player_masks: Dict[int, np.ndarray],
-        player_boxes: Dict[int, List[float]],
-    ) -> Dict[int, str]:
-        """
-        Detect and recognize jersey numbers for players.
-
-        Uses IoS (Intersection over Smaller Area) to match number
-        detections to player masks.
-        """
-        if not self._init_jersey_detection():
-            return {}
-
-        frame_h, frame_w = frame.shape[:2]
-
-        # Detect number bounding boxes
-        result = self._jersey_detector.infer(
-            frame,
-            confidence=0.4,
-            iou_threshold=0.9
-        )[0]
-        detections = sv.Detections.from_inference(result)
-        number_detections = detections[detections.class_id == 2]  # NUMBER_CLASS_ID
-
-        if len(number_detections) == 0:
-            return {}
-
-        # Convert to masks for IoS calculation
-        number_masks = sv.xyxy_to_mask(
-            boxes=number_detections.xyxy,
-            resolution_wh=(frame_w, frame_h)
-        )
-
-        # Build player mask array
-        player_ids = list(player_masks.keys())
-        if not player_ids:
-            return {}
-
-        player_mask_array = np.array([
-            player_masks[pid].squeeze() for pid in player_ids
-        ])
-
-        # Calculate IoS
-        try:
-            iou_matrix = sv.mask_iou_batch(
-                masks_true=player_mask_array,
-                masks_detection=number_masks,
-                overlap_metric=sv.OverlapMetric.IOS
-            )
-        except Exception:
-            return {}
-
-        # Match and recognize
-        matches = {}
-        for player_idx, player_id in enumerate(player_ids):
-            for number_idx in range(len(number_masks)):
-                if iou_matrix[player_idx, number_idx] >= 0.9:
-                    # Crop and recognize
-                    box = number_detections.xyxy[number_idx]
-                    padded = sv.pad_boxes(xyxy=np.array([box]), px=10, py=10)[0]
-                    clipped = sv.clip_boxes(xyxy=np.array([padded]), resolution_wh=(frame_w, frame_h))[0]
-
-                    try:
-                        crop = sv.crop_image(frame, clipped)
-                        crop_resized = sv.resize_image(crop, resolution_wh=(224, 224))
-                        result = self._jersey_ocr_model.predict(crop_resized, "Read the number.")[0]
-
-                        if result and result.strip().isdigit():
-                            matches[player_id] = result.strip()
-                    except Exception:
-                        pass
-                    break
-
-        return matches
-
-    def _match_detections_to_existing(self, new_detections, existing_boxes, iou_threshold=0.3):
-        if not existing_boxes:
-            return [], new_detections
-
-        matched, unmatched = [], []
-        existing_ids = list(existing_boxes.keys())
-        existing_box_list = [existing_boxes[eid] for eid in existing_ids]
-
-        for det in new_detections:
-            det_box = det['box']
-            best_iou, best_match_id = 0, None
-
-            for eid, ebox in zip(existing_ids, existing_box_list):
-                iou = compute_iou(det_box, ebox)
-                if iou > best_iou:
-                    best_iou = iou
-                    best_match_id = eid
-
-            if best_iou >= iou_threshold:
-                det['matched_id'] = best_match_id
-                matched.append(det)
-            else:
-                unmatched.append(det)
-
-        return matched, unmatched
+    # ============================================================================
+    # Main Pipeline Method (Refactored)
+    # ============================================================================
 
     def process_video_with_tracking(
         self,
@@ -849,6 +1024,9 @@ class PlayerTracker:
     ) -> Dict:
         """
         Process video with player tracking, team classification, and jersey detection.
+
+        This is the main pipeline orchestrator. Complex tracking logic is still
+        inline (ByteTrack/SAM2), but other stages are extracted to helper methods.
 
         Args:
             video_path: Path to input video file
@@ -897,110 +1075,20 @@ class PlayerTracker:
         self.team_validator.reset()
 
         try:
-            # ============ STAGE: Frame Extraction ============
-            if resume and checkpoint.is_stage_complete('frames_extracted'):
-                print("Extracting frames... [CACHED]")
-                fps = checkpoint.get_metadata('fps')
-                width = checkpoint.get_metadata('width')
-                height = checkpoint.get_metadata('height')
-                frame_count = checkpoint.get_metadata('frame_count')
-                # Load frames from disk
-                frames = []
-                for idx in range(frame_count):
-                    frame_path = os.path.join(frames_dir, f"{idx:05d}.jpg")
-                    if os.path.exists(frame_path):
-                        frames.append(cv2.imread(frame_path))
-                print(f"  Loaded {len(frames)} frames from cache")
-            else:
-                print("Extracting frames...")
-                cap = cv2.VideoCapture(video_path)
-                if not cap.isOpened():
-                    raise ValueError(f"Could not open video file: {video_path}")
+            # ============ STAGE 1: Frame Extraction ============
+            frames, fps, width, height = self._extract_frames(
+                video_path, frames_dir, checkpoint, max_seconds, resume
+            )
+            frame_count = len(frames)
 
-                fps = cap.get(cv2.CAP_PROP_FPS)
-                if fps == 0:
-                    fps = 30.0
-                    print(f"  Warning: Could not read FPS, defaulting to {fps}")
-                width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-                height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            # ============ STAGE 2: Crop Collection ============
+            all_crops = self._collect_player_crops(frames, checkpoint, resume)
 
-                frames = []
-                while True:
-                    ret, frame = cap.read()
-                    if not ret:
-                        break
-                    frames.append(frame)
-                cap.release()
+            # ============ STAGE 3: Team Classifier Training ============
+            team_classifier = self._train_team_classifier(all_crops, team_names, checkpoint, resume)
 
-                if max_seconds is not None:
-                    max_frames = int(fps * max_seconds)
-                    if len(frames) > max_frames:
-                        frames = frames[:max_frames]
-
-                frame_count = len(frames)
-                print(f"Loaded {frame_count} frames ({frame_count/fps:.1f}s)")
-
-                print("Saving frames to disk...")
-                for idx, frame in tqdm(enumerate(frames), total=len(frames), desc="Saving frames"):
-                    cv2.imwrite(os.path.join(frames_dir, f"{idx:05d}.jpg"), frame)
-
-                # Save metadata
-                checkpoint.save_metadata('fps', fps)
-                checkpoint.save_metadata('width', width)
-                checkpoint.save_metadata('height', height)
-                checkpoint.save_metadata('frame_count', frame_count)
-                checkpoint.mark_stage_complete('frames_extracted')
-
-            # ============ STAGE: Crop Collection ============
-            if resume and checkpoint.is_stage_complete('crops_collected'):
-                print("Collecting player crops... [CACHED]")
-                all_crops = checkpoint.load_data('crops', [])
-                print(f"  Loaded {len(all_crops)} crops from cache")
-            else:
-                print("Collecting player crops...")
-                all_crops = []
-                crop_indices = list(range(0, len(frames), 30))
-                for i in tqdm(crop_indices, desc="Collecting crops"):
-                    sv_detections = self.player_detector.detect(frames[i])
-                    players = sv_detections[np.isin(sv_detections.class_id, PLAYER_CLASS_IDS)]
-                    if len(players) > 0:
-                        crops = get_player_crops(frames[i], players, scale_factor=0.4)
-                        all_crops.extend(crops)
-                print(f"  Collected {len(all_crops)} crops")
-                checkpoint.save_data('crops', all_crops)
-                checkpoint.mark_stage_complete('crops_collected')
-
-            # ============ STAGE: Team Classifier Training ============
-            tc_device = "cuda" if self.device.type == "cuda" else "cpu"
-            team_classifier = TeamClassifier(n_teams=2, device=tc_device)
-
-            if resume and checkpoint.is_stage_complete('team_classifier_trained'):
-                print("Training team classifier... [CACHED]")
-                tc_data = checkpoint.load_data('team_classifier')
-                if tc_data:
-                    team_classifier._kmeans = tc_data.get('_kmeans')
-                    team_classifier.is_fitted = tc_data.get('is_fitted', False)
-                    print(f"  Loaded team classifier from cache (fitted={team_classifier.is_fitted})")
-            else:
-                print("Training team classifier...")
-                if len(all_crops) >= 2:
-                    team_classifier.fit(all_crops)
-                checkpoint.save_data('team_classifier', {
-                    '_kmeans': team_classifier._kmeans,
-                    'is_fitted': team_classifier.is_fitted,
-                })
-                checkpoint.mark_stage_complete('team_classifier_trained')
-
-            # Set team names
-            team_classifier.team_names = {0: team_names[0], 1: team_names[1]}
-
-            # ============ STAGE: Court Detection ============
-            print("Detecting court...")
-            court_result = self.court_detector.detect_keypoints(frames[0])
-            print(f"  Court keypoints: {court_result['count'] if court_result else 0}")
-
-            court_mask = np.zeros((height, width), dtype=np.uint8)
-            court_mask[int(height * 0.20):int(height * 0.85), :] = 255
+            # ============ STAGE 4: Court Detection ============
+            court_mask = self._detect_court(frames[0], height, width)
 
             keyframe_indices = list(range(0, len(frames), keyframe_interval))
             print(f"Will detect at {len(keyframe_indices)} keyframes")
@@ -1008,12 +1096,13 @@ class PlayerTracker:
             # Initialize bytetrack_detections (will be populated if using ByteTrack mode)
             bytetrack_detections = {}
 
-            # ============ STAGE: Detection & Tracking ============
+            # ============ STAGE 5: Detection & Tracking ============
+            # NOTE: This stage is kept inline due to its complexity and multiple paths
+            # (ByteTrack vs SAM2, streaming vs batch, etc.)
+
             if use_bytetrack:
-                # ByteTrack mode: frame-by-frame detection with tracking
                 stage_name = 'bytetrack_tracked'
             else:
-                # SAM2 mode: keyframe detection with mask propagation
                 stage_name = 'sam2_segmented'
 
             if resume and checkpoint.is_stage_complete(stage_name):
@@ -1182,7 +1271,7 @@ class PlayerTracker:
                                         # Clean masks
                                         masks_dict = {}
                                         for i, obj_id in enumerate(tracker_ids_np):
-                                            mask = filter_segments_by_distance(masks[i], relative_distance=0.03)
+                                            mask = filter_segments_by_distance(masks[i], relative_distance=SAM2_MASK_FILTER_RELATIVE_DISTANCE)
                                             masks_dict[int(obj_id)] = mask
                                             box = mask_to_box(mask)
                                             if box is not None:
@@ -1234,7 +1323,7 @@ class PlayerTracker:
                             print("Saving masks in chunks to avoid memory issues...")
                             video_segments = {}
                             pbar = tqdm(total=frame_count, desc="SAM2 mask propagation")
-                            save_interval = 100  # Save every 100 frames
+                            save_interval = SAM2_CHUNK_SAVE_INTERVAL
                             chunk_id = 0
 
                             for out_frame_idx, out_obj_ids, out_mask_logits in predictor.propagate_in_video(inference_state):
@@ -1242,7 +1331,7 @@ class PlayerTracker:
                                 for i in range(len(out_obj_ids)):
                                     obj_id = int(out_obj_ids[i])
                                     mask = (out_mask_logits[i] > 0.0).cpu().numpy()
-                                    mask = filter_segments_by_distance(mask, relative_distance=0.03)
+                                    mask = filter_segments_by_distance(mask, relative_distance=SAM2_MASK_FILTER_RELATIVE_DISTANCE)
                                     masks_dict[obj_id] = mask
                                     box = mask_to_box(mask)
                                     if box is not None:
@@ -1295,6 +1384,7 @@ class PlayerTracker:
                 checkpoint.save_data('bytetrack_detections', bytetrack_detections)
                 checkpoint.mark_stage_complete(stage_name)
             else:
+                # ============ SAM2-only Mode: Keyframe detection with mask propagation ============
                 print("Loading SAM2 model...")
                 predictor = build_sam2_video_predictor(
                     config_file=f"configs/sam2.1/{self.sam2_config}.yaml",
@@ -1303,8 +1393,6 @@ class PlayerTracker:
                 )
 
                 print("Initializing video tracking...")
-                # Only use autocast on CUDA, not CPU
-                # Use float16 instead of bfloat16 for better compatibility with SAM2
                 use_autocast = self.device.type == "cuda"
                 autocast_dtype = torch.float16 if use_autocast else torch.float32
                 with torch.inference_mode(), torch.amp.autocast(device_type="cuda", dtype=autocast_dtype, enabled=use_autocast):
@@ -1373,7 +1461,7 @@ class PlayerTracker:
                             mask = (out_mask_logits[i] > 0.0).cpu().numpy()
 
                             # Clean up mask segments
-                            mask = filter_segments_by_distance(mask, relative_distance=0.03)
+                            mask = filter_segments_by_distance(mask, relative_distance=SAM2_MASK_FILTER_RELATIVE_DISTANCE)
 
                             masks_dict[obj_id] = mask
                             box = mask_to_box(mask)
@@ -1390,7 +1478,7 @@ class PlayerTracker:
                 checkpoint.save_data('current_boxes', current_boxes)
                 checkpoint.mark_stage_complete('sam2_segmented')
 
-            # ============ STAGE: Team Assignment ============
+            # ============ STAGE 6: Team Assignment ============
             if resume and checkpoint.is_stage_complete('teams_assigned'):
                 print("Assigning teams... [CACHED]")
                 tracking_info = checkpoint.load_data('tracking_info_with_teams', tracking_info)
@@ -1408,8 +1496,8 @@ class PlayerTracker:
                         box = mask_to_box(mask)
                         if box is None:
                             continue
-                        det = sv.Detections(xyxy=np.array([box]), class_id=np.array([3]))
-                        crops = get_player_crops(frames[0], det, scale_factor=0.4)
+                        det = sv.Detections(xyxy=np.array([box]), class_id=np.array([PLAYER_CLASS_ID]))
+                        crops = get_player_crops(frames[0], det, scale_factor=TEAM_CROP_SCALE_FACTOR)
                         if crops:
                             team_id = team_classifier.predict_single(crops[0])
                             tracking_info[obj_id]['team'] = team_id
@@ -1423,7 +1511,7 @@ class PlayerTracker:
                 checkpoint.save_data('tracking_info_with_teams', tracking_info)
                 checkpoint.mark_stage_complete('teams_assigned')
 
-            # ============ STAGE: Jersey Detection ============
+            # ============ STAGE 7: Jersey Detection ============
             jersey_numbers = {}
             if resume and checkpoint.is_stage_complete('jersey_detected'):
                 print("Detecting jersey numbers... [CACHED]")
@@ -1537,7 +1625,7 @@ class PlayerTracker:
 
                 return annotated, player_positions
 
-            # ============ STAGE: Position Smoothing ============
+            # ============ STAGE 8: Position Smoothing ============
             if resume and checkpoint.is_stage_complete('positions_smoothed'):
                 print("Collecting and smoothing positions... [CACHED]")
                 smoothed_positions = checkpoint.load_data('smoothed_positions', [])
