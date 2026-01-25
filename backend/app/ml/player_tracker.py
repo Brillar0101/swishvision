@@ -783,7 +783,7 @@ class PlayerTracker:
         output_dir: str,
         keyframe_interval: int = 30,
         iou_threshold: float = 0.3,
-        max_total_objects: int = 15,
+        max_total_objects: int = 30,
         num_sample_frames: int = 3,
         max_seconds: float = None,
         team_names: Tuple[str, str] = ("Indiana Pacers", "Oklahoma City Thunder"),
@@ -795,6 +795,7 @@ class PlayerTracker:
         use_sam2_segmentation: bool = False,
         use_streaming_sam2: bool = False,
         stages_to_generate: List[int] = None,
+        use_court_mask_filter: bool = True,
     ) -> Dict:
         """
         Process video with player tracking, team classification, and jersey detection.
@@ -804,7 +805,9 @@ class PlayerTracker:
             output_dir: Directory for output files
             keyframe_interval: Frames between player detection keyframes (ignored if use_bytetrack=True)
             iou_threshold: IoU threshold for matching detections
-            max_total_objects: Maximum players to track
+            max_total_objects: Maximum tracked objects to keep (filters to most frequent).
+                             Basketball: 10 players + 2-3 refs + buffer for ID switching.
+                             Default 30 allows headroom. Increase if players are being dropped.
             num_sample_frames: Number of sample frames to save
             max_seconds: Limit video to this many seconds (None for full video)
             team_names: Tuple of team names (team1, team2)
@@ -814,7 +817,9 @@ class PlayerTracker:
             clear_checkpoints: If True, clear all checkpoints before starting
             use_bytetrack: If True, use frame-by-frame ByteTrack for tracking
             use_sam2_segmentation: If True with use_bytetrack, add SAM2 segmentation to ByteTrack results
+            use_streaming_sam2: If True, use SAM2 streaming camera predictor (lower memory, falls back to batch if unavailable)
             stages_to_generate: List of stage numbers to generate (e.g., [1, 2]). None = all 6 stages.
+            use_court_mask_filter: If True, filter detections to only those on court. Prevents tracking spectators.
 
         Returns:
             Dict with results including paths to output videos and frames
@@ -982,18 +987,20 @@ class PlayerTracker:
                         bytetrack_detections[frame_idx] = sv.Detections.empty()
                         continue
 
-                    # Filter by court mask
-                    valid_mask = []
-                    for i in range(len(detections)):
-                        x1, y1, x2, y2 = detections.xyxy[i]
-                        center_y = int((y1 + y2) / 2)
-                        center_x = int((x1 + x2) / 2)
-                        center_y = min(max(center_y, 0), height - 1)
-                        center_x = min(max(center_x, 0), width - 1)
-                        on_court = court_mask[center_y, center_x] > 0
-                        valid_mask.append(on_court)
+                    # Filter by court mask (optional)
+                    if use_court_mask_filter:
+                        valid_mask = []
+                        for i in range(len(detections)):
+                            x1, y1, x2, y2 = detections.xyxy[i]
+                            center_y = int((y1 + y2) / 2)
+                            center_x = int((x1 + x2) / 2)
+                            center_y = min(max(center_y, 0), height - 1)
+                            center_x = min(max(center_x, 0), width - 1)
+                            on_court = court_mask[center_y, center_x] > 0
+                            valid_mask.append(on_court)
 
-                    detections = detections[np.array(valid_mask)]
+                        detections = detections[np.array(valid_mask)]
+
                     bytetrack_detections[frame_idx] = detections
 
                     # Build tracking info
