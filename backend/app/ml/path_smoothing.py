@@ -13,11 +13,31 @@ from typing import Tuple, Optional
 from scipy.signal import savgol_filter
 from scipy.ndimage import median_filter
 
+# ============================================================================
+# CONSTANTS
+# ============================================================================
+
+# Jump detection (from Roboflow reference)
+DEFAULT_JUMP_SIGMA = 3.5  # Standard deviations for outlier detection
+DEFAULT_MIN_JUMP_DIST = 0.6  # Minimum distance (in court units) to consider a jump
+MAD_TO_STD_SCALE = 1.4826  # Scales Median Absolute Deviation to standard deviation
+
+# Run expansion (from Roboflow reference)
+DEFAULT_MAX_JUMP_RUN = 18  # Maximum length of abnormal runs to remove
+DEFAULT_PAD_AROUND_RUNS = 2  # Padding around removed runs
+
+# Savitzky-Golay smoothing (from Roboflow reference)
+DEFAULT_SMOOTH_WINDOW = 9  # Window size (must be odd)
+DEFAULT_SMOOTH_POLY = 2  # Polynomial order
+
+# Tactical view position smoothing
+DEFAULT_TACTICAL_WINDOW = 5  # Moving average window size
+
 
 def detect_jumps(
     xy: np.ndarray,
-    sigma: float = 3.5,
-    min_dist: float = 0.6,
+    sigma: float = DEFAULT_JUMP_SIGMA,
+    min_dist: float = DEFAULT_MIN_JUMP_DIST,
 ) -> np.ndarray:
     """
     Detect sudden jumps in position using speed analysis.
@@ -40,7 +60,7 @@ def detect_jumps(
     # Use robust statistics (median absolute deviation)
     median_dist = np.median(distances)
     mad = np.median(np.abs(distances - median_dist))
-    threshold = median_dist + sigma * 1.4826 * mad  # 1.4826 scales MAD to std
+    threshold = median_dist + sigma * MAD_TO_STD_SCALE * mad
 
     # Also enforce minimum distance
     threshold = max(threshold, min_dist)
@@ -128,8 +148,8 @@ def interpolate_missing(
 
 def smooth_path(
     xy: np.ndarray,
-    window: int = 9,
-    poly_order: int = 2,
+    window: int = DEFAULT_SMOOTH_WINDOW,
+    poly_order: int = DEFAULT_SMOOTH_POLY,
 ) -> np.ndarray:
     """
     Smooth path using Savitzky-Golay filter.
@@ -158,12 +178,12 @@ def smooth_path(
 
 def clean_paths(
     video_xy: np.ndarray,
-    jump_sigma: float = 3.5,
-    min_jump_dist: float = 0.6,
-    max_jump_run: int = 18,
-    pad_around_runs: int = 2,
-    smooth_window: int = 9,
-    smooth_poly: int = 2,
+    jump_sigma: float = DEFAULT_JUMP_SIGMA,
+    min_jump_dist: float = DEFAULT_MIN_JUMP_DIST,
+    max_jump_run: int = DEFAULT_MAX_JUMP_RUN,
+    pad_around_runs: int = DEFAULT_PAD_AROUND_RUNS,
+    smooth_window: int = DEFAULT_SMOOTH_WINDOW,
+    smooth_poly: int = DEFAULT_SMOOTH_POLY,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Clean player movement paths by removing teleportation artifacts.
@@ -216,7 +236,7 @@ def clean_paths(
 
 def smooth_tactical_positions(
     positions_history: list,
-    window_size: int = 5,
+    window_size: int = DEFAULT_TACTICAL_WINDOW,
 ) -> list:
     """
     Simple moving average smoothing for tactical view positions.

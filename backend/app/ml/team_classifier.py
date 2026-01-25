@@ -8,11 +8,34 @@ import supervision as sv
 from typing import Dict, List, Tuple, Optional
 from sklearn.cluster import KMeans
 
+# ============================================================================
+# CONSTANTS
+# ============================================================================
+
+# SigLIP model
+SIGLIP_MODEL_NAME = "google/siglip-base-patch16-224"
+SIGLIP_EMBEDDING_DIM = 768  # Output dimension
+
+# K-means clustering
+DEFAULT_N_TEAMS = 2
+KMEANS_RANDOM_STATE = 42
+KMEANS_N_INIT = 10
+
+# Team crop extraction
+DEFAULT_CROP_SCALE_FACTOR = 0.4  # Center region scale for jersey area
+
+# Default team colors (BGR format for OpenCV)
+DEFAULT_TEAM_COLORS = {
+    0: (0, 255, 0),    # Green for Team A
+    1: (0, 0, 255),    # Red for Team B
+    -1: (0, 255, 255), # Yellow for referees
+}
+
 
 class TeamClassifier:
     """Classify players into teams using SigLIP embeddings."""
 
-    def __init__(self, n_teams: int = 2, device: str = "cpu"):
+    def __init__(self, n_teams: int = DEFAULT_N_TEAMS, device: str = "cpu"):
         self.n_teams = n_teams
         self.device = device
         self._model = None
@@ -27,11 +50,7 @@ class TeamClassifier:
         }
 
         # Team colors for visualization (BGR)
-        self.team_colors = {
-            0: (0, 255, 0),    # Green for Team A
-            1: (0, 0, 255),    # Red for Team B
-            -1: (0, 255, 255), # Yellow for referees
-        }
+        self.team_colors = DEFAULT_TEAM_COLORS.copy()
 
     def _load_model(self):
         """Lazy load the SigLIP model."""
@@ -42,9 +61,8 @@ class TeamClassifier:
             from transformers import AutoProcessor, SiglipVisionModel
             import torch
 
-            model_name = "google/siglip-base-patch16-224"
-            self._processor = AutoProcessor.from_pretrained(model_name)
-            self._model = SiglipVisionModel.from_pretrained(model_name)
+            self._processor = AutoProcessor.from_pretrained(SIGLIP_MODEL_NAME)
+            self._model = SiglipVisionModel.from_pretrained(SIGLIP_MODEL_NAME)
 
             if self.device == "cuda" and torch.cuda.is_available():
                 self._model = self._model.to("cuda")
@@ -75,7 +93,7 @@ class TeamClassifier:
         rgb_crops = [cv2.cvtColor(c, cv2.COLOR_BGR2RGB) for c in crops if c.size > 0]
 
         if len(rgb_crops) == 0:
-            return np.zeros((len(crops), 768))
+            return np.zeros((len(crops), SIGLIP_EMBEDDING_DIM))
 
         # Process through SigLIP
         with torch.no_grad():
@@ -105,7 +123,11 @@ class TeamClassifier:
         embeddings = self._get_embeddings(crops)
 
         # Fit K-means
-        self._kmeans = KMeans(n_clusters=self.n_teams, random_state=42, n_init=10)
+        self._kmeans = KMeans(
+            n_clusters=self.n_teams,
+            random_state=KMEANS_RANDOM_STATE,
+            n_init=KMEANS_N_INIT
+        )
         self._kmeans.fit(embeddings)
 
         self.is_fitted = True
@@ -179,7 +201,7 @@ class TeamClassifier:
 def get_player_crops(
     frame: np.ndarray,
     detections: sv.Detections,
-    scale_factor: float = 0.4
+    scale_factor: float = DEFAULT_CROP_SCALE_FACTOR
 ) -> List[np.ndarray]:
     """
     Extract center crops from player detections for team classification.
@@ -187,7 +209,7 @@ def get_player_crops(
     Args:
         frame: Video frame
         detections: Player detections
-        scale_factor: How much to scale boxes to get center crop (0.4 = 40% of box)
+        scale_factor: How much to scale boxes to get center crop (default = 40% of box)
 
     Returns:
         List of crop images
@@ -208,7 +230,7 @@ def classify_frame_teams(
     frame: np.ndarray,
     detections: sv.Detections,
     classifier: TeamClassifier,
-    scale_factor: float = 0.4
+    scale_factor: float = DEFAULT_CROP_SCALE_FACTOR
 ) -> np.ndarray:
     """
     Classify teams for detections in a single frame.

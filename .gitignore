@@ -36,6 +36,9 @@ portfolio_outputs*/
 *.log
 logs/
 
+# Context file
+Context.txt
+
 # ML models (too large for git)
 *.pt
 *.pth
