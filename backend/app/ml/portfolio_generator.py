@@ -60,6 +60,7 @@ class PortfolioGenerator:
         output_dir: str,
         fps: float = 30.0,
         smoothed_positions: List[Dict[int, Tuple[float, float]]] = None,
+        stages_to_generate: List[int] = None,
     ) -> Dict[str, str]:
         """
         Generate separate videos for each pipeline stage.
@@ -72,6 +73,7 @@ class PortfolioGenerator:
             output_dir: Output directory for videos
             fps: Video frame rate
             smoothed_positions: Optional smoothed positions for tactical view
+            stages_to_generate: List of stage numbers to generate (e.g., [1, 2]). None = all stages.
 
         Returns:
             Dict mapping stage name to video path
@@ -81,43 +83,53 @@ class PortfolioGenerator:
         height, width = frames[0].shape[:2]
         frame_count = len(frames)
 
+        # Default: generate all stages
+        if stages_to_generate is None:
+            stages_to_generate = [1, 2, 3, 4, 5, 6]
+
         output_paths = {}
 
         # Stage 1: Raw Detection
-        print("Generating Stage 1: Raw Detection...")
-        output_paths['detection'] = self._generate_detection_video(
-            frames, detections_per_frame, output_dir, fps
-        )
+        if 1 in stages_to_generate:
+            print("Generating Stage 1: Raw Detection...")
+            output_paths['detection'] = self._generate_detection_video(
+                frames, detections_per_frame, output_dir, fps
+            )
 
         # Stage 2: Segmentation
-        print("Generating Stage 2: Segmentation...")
-        output_paths['segmentation'] = self._generate_segmentation_video(
-            frames, video_segments, output_dir, fps
-        )
+        if 2 in stages_to_generate:
+            print("Generating Stage 2: Segmentation...")
+            output_paths['segmentation'] = self._generate_segmentation_video(
+                frames, video_segments, output_dir, fps
+            )
 
         # Stage 3: Team Classification
-        print("Generating Stage 3: Team Classification...")
-        output_paths['teams'] = self._generate_teams_video(
-            frames, video_segments, tracking_info, output_dir, fps
-        )
+        if 3 in stages_to_generate:
+            print("Generating Stage 3: Team Classification...")
+            output_paths['teams'] = self._generate_teams_video(
+                frames, video_segments, tracking_info, output_dir, fps
+            )
 
         # Stage 4: Jersey Detection
-        print("Generating Stage 4: Jersey Detection...")
-        output_paths['jersey'] = self._generate_jersey_video(
-            frames, video_segments, tracking_info, output_dir, fps
-        )
+        if 4 in stages_to_generate:
+            print("Generating Stage 4: Jersey Detection...")
+            output_paths['jersey'] = self._generate_jersey_video(
+                frames, video_segments, tracking_info, output_dir, fps
+            )
 
         # Stage 5: Tactical View Only
-        print("Generating Stage 5: Tactical View...")
-        output_paths['tactical'] = self._generate_tactical_video(
-            frames, video_segments, tracking_info, output_dir, fps, smoothed_positions
-        )
+        if 5 in stages_to_generate:
+            print("Generating Stage 5: Tactical View...")
+            output_paths['tactical'] = self._generate_tactical_video(
+                frames, video_segments, tracking_info, output_dir, fps, smoothed_positions
+            )
 
         # Stage 6: Combined View
-        print("Generating Stage 6: Combined View...")
-        output_paths['combined'] = self._generate_combined_video(
-            frames, video_segments, tracking_info, output_dir, fps, smoothed_positions
-        )
+        if 6 in stages_to_generate:
+            print("Generating Stage 6: Combined View...")
+            output_paths['combined'] = self._generate_combined_video(
+                frames, video_segments, tracking_info, output_dir, fps, smoothed_positions
+            )
 
         print(f"Generated {len(output_paths)} portfolio videos")
         return output_paths
