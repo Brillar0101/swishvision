@@ -432,6 +432,7 @@ class PlayerTracker:
         width: int,
         height: int,
         stages_to_generate: List[int] = None,
+        bytetrack_detections: Dict[int, 'sv.Detections'] = None,
     ) -> Dict[str, str]:
         """
         Generate video files for each pipeline stage.
@@ -474,17 +475,40 @@ class PlayerTracker:
             print("  Stage 2: Detection video...")
             path = os.path.join(output_dir, "stage_2_detection.mp4")
             writer = cv2.VideoWriter(path, fourcc, fps, (width, height))
+
+            # Use ByteTrack detections if available (shows actual detections on all frames)
+            # Otherwise fall back to SAM2 video_segments
+            use_bytetrack_for_video = bytetrack_detections is not None and len(bytetrack_detections) > 0
+
             for frame_idx, frame in tqdm(enumerate(frames), total=frame_count, desc="Detection", leave=False):
                 out_frame = frame.copy()
-                masks = video_segments.get(frame_idx, {})
-                for obj_id, mask in masks.items():
-                    box = mask_to_box(mask)
-                    if box:
-                        x1, y1, x2, y2 = int(box[0]), int(box[1]), int(box[2]), int(box[3])
-                        cv2.rectangle(out_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                        cv2.putText(out_frame, f"ID:{obj_id}", (x1, y1-5),
-                                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-                self._add_stage_label(out_frame, "Stage 2: Player Detection (RF-DETR)")
+
+                if use_bytetrack_for_video:
+                    # Use original ByteTrack detections (shows all detections including players who leave frame)
+                    detections = bytetrack_detections.get(frame_idx, sv.Detections.empty())
+                    if len(detections) > 0:
+                        for i in range(len(detections)):
+                            box = detections.xyxy[i]
+                            x1, y1, x2, y2 = int(box[0]), int(box[1]), int(box[2]), int(box[3])
+                            cv2.rectangle(out_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+
+                            # Show tracker ID if available
+                            if detections.tracker_id is not None:
+                                tid = int(detections.tracker_id[i])
+                                cv2.putText(out_frame, f"ID:{tid}", (x1, y1-5),
+                                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                else:
+                    # Fall back to SAM2 video_segments
+                    masks = video_segments.get(frame_idx, {})
+                    for obj_id, mask in masks.items():
+                        box = mask_to_box(mask)
+                        if box:
+                            x1, y1, x2, y2 = int(box[0]), int(box[1]), int(box[2]), int(box[3])
+                            cv2.rectangle(out_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                            cv2.putText(out_frame, f"ID:{obj_id}", (x1, y1-5),
+                                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+
+                self._add_stage_label(out_frame, "Stage 2: Player Detection (RF-DETR + ByteTrack)")
                 writer.write(out_frame)
             writer.release()
             stage_videos['detection'] = path
@@ -955,6 +979,9 @@ class PlayerTracker:
             keyframe_indices = list(range(0, len(frames), keyframe_interval))
             print(f"Will detect at {len(keyframe_indices)} keyframes")
 
+            # Initialize bytetrack_detections (will be populated if using ByteTrack mode)
+            bytetrack_detections = {}
+
             # ============ STAGE: Detection & Tracking ============
             if use_bytetrack:
                 # ByteTrack mode: frame-by-frame detection with tracking
@@ -982,7 +1009,10 @@ class PlayerTracker:
 
                 tracking_info = checkpoint.load_data('tracking_info', {})
                 current_boxes = checkpoint.load_data('current_boxes', {})
+                bytetrack_detections = checkpoint.load_data('bytetrack_detections', {})
                 print(f"  {len(tracking_info)} tracked objects loaded")
+                if bytetrack_detections:
+                    print(f"  {len(bytetrack_detections)} frames with ByteTrack detections")
             elif use_bytetrack:
                 # ============ ByteTrack Mode: Frame-by-frame detection ============
                 print("Running ByteTrack frame-by-frame detection...")
@@ -1236,6 +1266,7 @@ class PlayerTracker:
                     checkpoint.save_data('video_segments', video_segments)
                 checkpoint.save_data('tracking_info', tracking_info)
                 checkpoint.save_data('current_boxes', current_boxes)
+                checkpoint.save_data('bytetrack_detections', bytetrack_detections)
                 checkpoint.mark_stage_complete(stage_name)
             else:
                 print("Loading SAM2 model...")
@@ -1543,7 +1574,7 @@ class PlayerTracker:
             stage_videos = self._generate_stage_videos(
                 frames, video_segments, tracking_info, team_classifier,
                 output_dir, tactical_view, smoothed_positions, fps, width, height,
-                stages_to_generate
+                stages_to_generate, bytetrack_detections
             )
             print(f"  Generated {len(stage_videos)} stage videos")
             output_video_path = stage_videos.get('final')
