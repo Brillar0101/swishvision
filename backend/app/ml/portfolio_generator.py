@@ -56,6 +56,65 @@ def mask_to_box(mask):
     return [float(xs.min()), float(ys.min()), float(xs.max()), float(ys.max())]
 
 
+def draw_mask_overlay(
+    frame: np.ndarray,
+    mask: np.ndarray,
+    color: Tuple[int, int, int],
+    alpha: float = TEAM_OVERLAY_ALPHA
+) -> np.ndarray:
+    """
+    Draw a colored mask overlay on a frame.
+
+    Args:
+        frame: Frame to draw on
+        mask: Binary mask
+        color: BGR color tuple
+        alpha: Transparency (0.0-1.0)
+
+    Returns:
+        Frame with mask overlay
+    """
+    mask_2d = mask.squeeze()
+    mask_colored = np.zeros_like(frame)
+    mask_colored[mask_2d] = color
+    return cv2.addWeighted(frame, 1.0, mask_colored, alpha, 0)
+
+
+def draw_player_annotation(
+    frame: np.ndarray,
+    mask: np.ndarray,
+    color: Tuple[int, int, int],
+    label: str,
+    alpha: float = TEAM_OVERLAY_ALPHA,
+    draw_box: bool = True
+) -> np.ndarray:
+    """
+    Draw complete player annotation (mask, box, label).
+
+    Args:
+        frame: Frame to annotate
+        mask: Player mask
+        color: BGR color tuple
+        label: Text label
+        alpha: Mask transparency
+        draw_box: Whether to draw bounding box
+
+    Returns:
+        Annotated frame
+    """
+    # Draw mask overlay
+    annotated = draw_mask_overlay(frame, mask, color, alpha)
+
+    # Draw bounding box and label
+    box = mask_to_box(mask)
+    if box and draw_box:
+        x1, y1, x2, y2 = int(box[0]), int(box[1]), int(box[2]), int(box[3])
+        cv2.rectangle(annotated, (x1, y1), (x2, y2), color, BOX_THICKNESS)
+        annotated = create_player_label(annotated, label, (x1, y1, x2, y2), color, use_pil=True)
+
+    return annotated
+
+
 class PortfolioGenerator:
     """
     Generates portfolio videos showing each stage of the SwishVision pipeline.
@@ -272,7 +331,6 @@ class PortfolioGenerator:
                 team_counts = {0: 0, 1: 0, -1: 0}
 
                 for obj_id, mask in video_segments[frame_idx].items():
-                    mask_2d = mask.squeeze()
                     info = tracking_info.get(obj_id, {})
                     team_id = info.get('team', 0)
                     team_name = info.get('team_name', 'Unknown')
@@ -280,20 +338,8 @@ class PortfolioGenerator:
 
                     team_counts[team_id] = team_counts.get(team_id, 0) + 1
 
-                    # Draw colored mask
-                    mask_colored = np.zeros_like(annotated)
-                    mask_colored[mask_2d] = color
-                    annotated = cv2.addWeighted(annotated, 1.0, mask_colored, TEAM_OVERLAY_ALPHA, 0)
-
-                    # Draw bounding box with professional styling
-                    box = mask_to_box(mask)
-                    if box:
-                        x1, y1, x2, y2 = int(box[0]), int(box[1]), int(box[2]), int(box[3])
-                        cv2.rectangle(annotated, (x1, y1), (x2, y2), color, BOX_THICKNESS)
-
-                        # Add team label with professional styling
-                        label = team_name
-                        annotated = create_player_label(annotated, label, (x1, y1, x2, y2), color, use_pil=True)
+                    # Draw player annotation (mask + box + label)
+                    annotated = draw_player_annotation(annotated, mask, color, team_name)
 
                 # Add team counts with stats overlay
                 stats = {}
@@ -336,7 +382,6 @@ class PortfolioGenerator:
                 identified_count = 0
 
                 for obj_id, mask in video_segments[frame_idx].items():
-                    mask_2d = mask.squeeze()
                     info = tracking_info.get(obj_id, {})
                     team_id = info.get('team', 0)
                     color = self.team_colors.get(team_id, (128, 128, 128))
@@ -347,26 +392,16 @@ class PortfolioGenerator:
                     if jersey_number:
                         identified_count += 1
 
-                    # Draw colored mask
-                    mask_colored = np.zeros_like(annotated)
-                    mask_colored[mask_2d] = color
-                    annotated = cv2.addWeighted(annotated, 1.0, mask_colored, TEAM_OVERLAY_ALPHA, 0)
+                    # Create label with jersey number and player name
+                    if jersey_number and player_name:
+                        label = f"#{jersey_number} {player_name}"
+                    elif jersey_number:
+                        label = f"#{jersey_number}"
+                    else:
+                        label = f"ID:{obj_id}"
 
-                    # Draw bounding box with thicker lines
-                    box = mask_to_box(mask)
-                    if box:
-                        x1, y1, x2, y2 = int(box[0]), int(box[1]), int(box[2]), int(box[3])
-                        cv2.rectangle(annotated, (x1, y1), (x2, y2), color, BOX_THICKNESS)
-
-                        # Create professional label with jersey number and player name
-                        if jersey_number and player_name:
-                            label = f"#{jersey_number} {player_name}"
-                        elif jersey_number:
-                            label = f"#{jersey_number}"
-                        else:
-                            label = f"ID:{obj_id}"
-
-                        annotated = create_player_label(annotated, label, (x1, y1, x2, y2), color, use_pil=True)
+                    # Draw player annotation (mask + box + label)
+                    annotated = draw_player_annotation(annotated, mask, color, label)
 
                 # Add identification stats with professional overlay
                 total = len(video_segments[frame_idx])
@@ -474,35 +509,24 @@ class PortfolioGenerator:
 
             if frame_idx in video_segments:
                 for obj_id, mask in video_segments[frame_idx].items():
-                    mask_2d = mask.squeeze()
                     info = tracking_info.get(obj_id, {})
                     team_id = info.get('team', 0)
                     color = self.team_colors.get(team_id, (128, 128, 128))
 
-                    # Draw colored mask
-                    mask_colored = np.zeros_like(annotated)
-                    mask_colored[mask_2d] = color
-                    annotated = cv2.addWeighted(annotated, 1.0, mask_colored, TEAM_OVERLAY_ALPHA, 0)
+                    # Create professional label
+                    jersey_number = info.get('jersey_number')
+                    player_name = info.get('player_name')
 
-                    # Draw bounding box with professional styling
-                    box = mask_to_box(mask)
-                    if box:
-                        x1, y1, x2, y2 = int(box[0]), int(box[1]), int(box[2]), int(box[3])
-                        cv2.rectangle(annotated, (x1, y1), (x2, y2), color, BOX_THICKNESS)
+                    if jersey_number and player_name:
+                        label = f"#{jersey_number} {player_name}"
+                    elif jersey_number:
+                        label = f"#{jersey_number}"
+                    else:
+                        team_name = info.get('team_name', '')
+                        label = f"#{obj_id} {team_name}"
 
-                        # Create professional label
-                        jersey_number = info.get('jersey_number')
-                        player_name = info.get('player_name')
-
-                        if jersey_number and player_name:
-                            label = f"#{jersey_number} {player_name}"
-                        elif jersey_number:
-                            label = f"#{jersey_number}"
-                        else:
-                            team_name = info.get('team_name', '')
-                            label = f"#{obj_id} {team_name}"
-
-                        annotated = create_player_label(annotated, label, (x1, y1, x2, y2), color, use_pil=True)
+                    # Draw player annotation (mask + box + label)
+                    annotated = draw_player_annotation(annotated, mask, color, label)
 
             # Add tactical view overlay
             if positions:
