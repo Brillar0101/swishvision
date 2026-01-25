@@ -771,6 +771,7 @@ class PlayerTracker:
         smooth_tactical: bool = True,
         resume: bool = True,
         clear_checkpoints: bool = False,
+        use_bytetrack: bool = False,
     ) -> Dict:
         """
         Process video with player tracking, team classification, and jersey detection.
@@ -778,7 +779,7 @@ class PlayerTracker:
         Args:
             video_path: Path to input video file
             output_dir: Directory for output files
-            keyframe_interval: Frames between player detection keyframes
+            keyframe_interval: Frames between player detection keyframes (ignored if use_bytetrack=True)
             iou_threshold: IoU threshold for matching detections
             max_total_objects: Maximum players to track
             num_sample_frames: Number of sample frames to save
@@ -788,6 +789,7 @@ class PlayerTracker:
             smooth_tactical: Apply smoothing to tactical view positions
             resume: If True, resume from last checkpoint. If False, start fresh.
             clear_checkpoints: If True, clear all checkpoints before starting
+            use_bytetrack: If True, use frame-by-frame ByteTrack instead of SAM2 segmentation
 
         Returns:
             Dict with results including paths to output videos and frames
@@ -923,13 +925,96 @@ class PlayerTracker:
             keyframe_indices = list(range(0, len(frames), keyframe_interval))
             print(f"Will detect at {len(keyframe_indices)} keyframes")
 
-            # ============ STAGE: SAM2 Segmentation ============
-            if resume and checkpoint.is_stage_complete('sam2_segmented'):
-                print("SAM2 segmentation... [CACHED]")
+            # ============ STAGE: Detection & Tracking ============
+            if use_bytetrack:
+                # ByteTrack mode: frame-by-frame detection with tracking
+                stage_name = 'bytetrack_tracked'
+            else:
+                # SAM2 mode: keyframe detection with mask propagation
+                stage_name = 'sam2_segmented'
+
+            if resume and checkpoint.is_stage_complete(stage_name):
+                mode_name = "ByteTrack tracking" if use_bytetrack else "SAM2 segmentation"
+                print(f"{mode_name}... [CACHED]")
                 video_segments = checkpoint.load_data('video_segments', {})
                 tracking_info = checkpoint.load_data('tracking_info', {})
                 current_boxes = checkpoint.load_data('current_boxes', {})
                 print(f"  Loaded {len(video_segments)} frames with {len(tracking_info)} tracked objects from cache")
+            elif use_bytetrack:
+                # ============ ByteTrack Mode: Frame-by-frame detection ============
+                print("Running ByteTrack frame-by-frame detection...")
+                video_segments = {}
+                tracking_info = {}
+                current_boxes = {}
+
+                # Track all frames
+                for frame_idx in tqdm(range(len(frames)), desc="ByteTrack detection"):
+                    frame = frames[frame_idx]
+
+                    # Detect and track
+                    detections = self.player_detector.detect_and_track(frame)
+
+                    if len(detections) == 0:
+                        video_segments[frame_idx] = {}
+                        continue
+
+                    # Filter by court mask
+                    valid_mask = []
+                    for i in range(len(detections)):
+                        x1, y1, x2, y2 = detections.xyxy[i]
+                        center_y = int((y1 + y2) / 2)
+                        center_x = int((x1 + x2) / 2)
+                        center_y = min(max(center_y, 0), height - 1)
+                        center_x = min(max(center_x, 0), width - 1)
+                        on_court = court_mask[center_y, center_x] > 0
+                        valid_mask.append(on_court)
+
+                    detections = detections[np.array(valid_mask)]
+
+                    if len(detections) == 0:
+                        video_segments[frame_idx] = {}
+                        continue
+
+                    # Store detections as "masks" (bounding boxes only)
+                    masks_dict = {}
+                    for i in range(len(detections)):
+                        if detections.tracker_id is None:
+                            continue
+
+                        tracker_id = int(detections.tracker_id[i])
+                        box = detections.xyxy[i].tolist()
+                        class_id = int(detections.class_id[i])
+                        conf = float(detections.confidence[i]) if detections.confidence is not None else 1.0
+
+                        # Create box mask (not pixel-perfect, but compatible)
+                        mask = np.zeros((height, width), dtype=bool)
+                        x1, y1, x2, y2 = map(int, box)
+                        mask[y1:y2, x1:x2] = True
+
+                        masks_dict[tracker_id] = mask
+                        current_boxes[tracker_id] = box
+
+                        # Initialize tracking info
+                        if tracker_id not in tracking_info:
+                            cls_name = 'player' if class_id in PLAYER_CLASS_IDS else 'referee'
+                            tracking_info[tracker_id] = {
+                                'class': cls_name,
+                                'confidence': conf
+                            }
+
+                    video_segments[frame_idx] = masks_dict
+
+                print(f"Total tracked objects: {len(tracking_info)}")
+
+                if len(tracking_info) == 0:
+                    return {"error": "No players detected"}
+
+                # Save ByteTrack results
+                print("Saving ByteTrack results...")
+                checkpoint.save_data('video_segments', video_segments)
+                checkpoint.save_data('tracking_info', tracking_info)
+                checkpoint.save_data('current_boxes', current_boxes)
+                checkpoint.mark_stage_complete(stage_name)
             else:
                 print("Loading SAM2 model...")
                 predictor = build_sam2_video_predictor(
