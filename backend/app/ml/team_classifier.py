@@ -152,6 +152,29 @@ class TeamClassifier:
         """Set custom team colors (BGR)."""
         self.team_colors.update(colors)
 
+    def swap_teams(self) -> None:
+        """
+        Swap team assignments (0 ↔ 1).
+
+        This flips the K-means cluster labels so Team 0 becomes Team 1 and vice versa.
+        Useful when the automatic clustering assigns teams incorrectly.
+        """
+        if not self.is_fitted or self._kmeans is None:
+            print("Cannot swap teams: classifier not fitted yet")
+            return
+
+        # Swap cluster centers
+        if hasattr(self._kmeans, 'cluster_centers_'):
+            centers = self._kmeans.cluster_centers_.copy()
+            self._kmeans.cluster_centers_[0] = centers[1]
+            self._kmeans.cluster_centers_[1] = centers[0]
+
+        # Swap labels
+        if hasattr(self._kmeans, 'labels_'):
+            self._kmeans.labels_ = 1 - self._kmeans.labels_
+
+        print("  Teams swapped: Team 0 ↔ Team 1")
+
 
 def get_player_crops(
     frame: np.ndarray,
