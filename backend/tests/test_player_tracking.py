@@ -192,7 +192,8 @@ def test_player_tracking(
     # Initialize detector with ByteTrack
     print("Initializing RF-DETR + ByteTrack...")
     detector = PlayerRefereeDetector()
-    print(f"Detection model: {detector.model_id}")
+    model_type = "RF-DETR (local)" if detector._use_rfdetr else "Roboflow API"
+    print(f"Detection model: {model_type}")
     print()
 
     # Run detection + tracking on all frames
