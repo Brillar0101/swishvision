@@ -22,7 +22,7 @@ result = tracker.process_video_with_tracking(
     use_streaming_sam2=True,         # Streaming mode (falls back to batch if unavailable)
     max_total_objects=20,            # Track up to 20 objects (balance between coverage and memory)
     use_court_mask_filter=True,      # Filter to only on-court detections
-    max_seconds=15.0,                # Process first 15 seconds to test memory usage
+    max_seconds=None,                # Process full video
     resume=False                     # Start fresh with new chunked SAM2 saving
 )
 
