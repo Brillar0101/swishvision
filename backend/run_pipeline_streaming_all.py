@@ -20,8 +20,9 @@ result = tracker.process_video_with_tracking(
     use_bytetrack=True,              # ByteTrack for persistent IDs
     use_sam2_segmentation=True,      # SAM2 for pixel-perfect masks
     use_streaming_sam2=True,         # Streaming mode (falls back to batch if unavailable)
-    max_total_objects=30,            # Track up to 30 objects (increased from 15)
+    max_total_objects=20,            # Track up to 20 objects (balance between coverage and memory)
     use_court_mask_filter=True,      # Filter to only on-court detections
+    max_seconds=15.0,                # Process first 15 seconds to test memory usage
     resume=False                     # Start fresh (set to True to resume from checkpoint)
 )
 
