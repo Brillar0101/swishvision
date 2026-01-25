@@ -27,6 +27,7 @@ Thumbs.db
 # Test outputs
 test_videos/
 outputs/
+portfolio_outputs*/
 *.mp4
 *.avi
 *.mov
