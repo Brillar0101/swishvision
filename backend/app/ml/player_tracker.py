@@ -966,10 +966,23 @@ class PlayerTracker:
             if resume and checkpoint.is_stage_complete(stage_name):
                 mode_name = "ByteTrack tracking" if use_bytetrack else "SAM2 segmentation"
                 print(f"{mode_name}... [CACHED]")
-                video_segments = checkpoint.load_data('video_segments', {})
+
+                # Load video_segments (handle chunked storage)
+                num_chunks = checkpoint.load_data('video_segments_num_chunks')
+                if num_chunks is not None:
+                    print(f"Loading {num_chunks} mask chunks...")
+                    video_segments = {}
+                    for i in range(num_chunks):
+                        chunk = checkpoint.load_data(f'video_segments_chunk_{i}', {})
+                        video_segments.update(chunk)
+                    print(f"  Loaded {len(video_segments)} frames from {num_chunks} chunks")
+                else:
+                    video_segments = checkpoint.load_data('video_segments', {})
+                    print(f"  Loaded {len(video_segments)} frames from monolithic save")
+
                 tracking_info = checkpoint.load_data('tracking_info', {})
                 current_boxes = checkpoint.load_data('current_boxes', {})
-                print(f"  Loaded {len(video_segments)} frames with {len(tracking_info)} tracked objects from cache")
+                print(f"  {len(tracking_info)} tracked objects loaded")
             elif use_bytetrack:
                 # ============ ByteTrack Mode: Frame-by-frame detection ============
                 print("Running ByteTrack frame-by-frame detection...")
@@ -1162,8 +1175,11 @@ class PlayerTracker:
                                         )
 
                             print(f"Propagating SAM2 masks for {len(tracker_first_frame)} objects...")
+                            print("Saving masks in chunks to avoid memory issues...")
                             video_segments = {}
                             pbar = tqdm(total=frame_count, desc="SAM2 mask propagation")
+                            save_interval = 100  # Save every 100 frames
+                            chunk_id = 0
 
                             for out_frame_idx, out_obj_ids, out_mask_logits in predictor.propagate_in_video(inference_state):
                                 masks_dict = {}
@@ -1177,7 +1193,22 @@ class PlayerTracker:
                                         current_boxes[obj_id] = box
                                 video_segments[out_frame_idx] = masks_dict
                                 pbar.update(1)
+
+                                # Save in chunks to limit memory usage
+                                if len(video_segments) >= save_interval:
+                                    checkpoint.save_data(f'video_segments_chunk_{chunk_id}', video_segments)
+                                    video_segments = {}
+                                    chunk_id += 1
+
+                            # Save remaining frames
+                            if len(video_segments) > 0:
+                                checkpoint.save_data(f'video_segments_chunk_{chunk_id}', video_segments)
+                                chunk_id += 1
+
+                            checkpoint.save_data('video_segments_num_chunks', chunk_id)
+                            checkpoint.save_data('current_boxes', current_boxes)
                             pbar.close()
+                            print(f"Saved {chunk_id} mask chunks (will merge on-demand to save memory)")
                 else:
                     # No SAM2: use bounding box masks
                     print("Using bounding box masks (no SAM2 segmentation)...")
@@ -1197,7 +1228,12 @@ class PlayerTracker:
 
                 # Save results
                 print("Saving results...")
-                checkpoint.save_data('video_segments', video_segments)
+                # Check if we saved in chunks (SAM2 case)
+                num_chunks = checkpoint.load_data('video_segments_num_chunks')
+                if num_chunks is not None:
+                    print(f"Using {num_chunks} pre-saved mask chunks (skipping full save)")
+                else:
+                    checkpoint.save_data('video_segments', video_segments)
                 checkpoint.save_data('tracking_info', tracking_info)
                 checkpoint.save_data('current_boxes', current_boxes)
                 checkpoint.mark_stage_complete(stage_name)
