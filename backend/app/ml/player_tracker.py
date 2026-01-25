@@ -28,9 +28,77 @@ from app.ml.team_classifier import TeamClassifier, get_player_crops
 from app.ml.tactical_view import TacticalView, create_combined_view
 from app.ml.team_rosters import TEAM_ROSTERS, TEAM_COLORS, get_player_name
 from app.ml.path_smoothing import smooth_tactical_positions
+from app.ml.jersey_detector import ConsecutiveValueTracker
 
-PLAYER_CLASS_IDS = [3, 4, 5, 6, 7]
-REFEREE_CLASS_IDS = [0, 1, 2]
+# ============================================================================
+# CONSTANTS
+# ============================================================================
+
+# Class IDs from RF-DETR basketball model
+BALL_CLASS_ID = 0
+BALL_IN_BASKET_CLASS_ID = 1
+NUMBER_CLASS_ID = 2
+PLAYER_CLASS_ID = 3
+PLAYER_IN_POSSESSION_CLASS_ID = 4
+PLAYER_JUMP_SHOT_CLASS_ID = 5
+PLAYER_LAYUP_DUNK_CLASS_ID = 6
+PLAYER_SHOT_BLOCK_CLASS_ID = 7
+REFEREE_CLASS_ID = 8
+RIM_CLASS_ID = 9
+
+# Aggregate class lists
+PLAYER_CLASS_IDS = [3, 4, 5, 6, 7]  # All player-related classes
+REFEREE_CLASS_IDS = [8]  # Referee class
+
+# Detection parameters
+DETECTION_CONFIDENCE = 0.4
+DETECTION_IOU_THRESHOLD = 0.9
+
+# ByteTrack parameters
+BYTETRACK_TRACK_ACTIVATION_THRESHOLD = 0.15
+BYTETRACK_LOST_TRACK_BUFFER = 600  # 20 seconds at 30fps
+BYTETRACK_MINIMUM_MATCHING_THRESHOLD = 0.5
+BYTETRACK_MINIMUM_CONSECUTIVE_FRAMES = 1
+
+# SAM2 parameters
+SAM2_CHECKPOINT = "checkpoints/sam2.1_hiera_large.pt"
+SAM2_CONFIG = "configs/sam2.1/sam2.1_hiera_l.yaml"
+SAM2_MASK_FILTER_RELATIVE_DISTANCE = 0.03
+SAM2_CHUNK_SAVE_INTERVAL = 100  # Save masks every N frames to avoid OOM
+
+# Team classification
+TEAM_CROP_SCALE_FACTOR = 0.4  # Scale factor for extracting player crops
+TEAM_SAMPLING_STRIDE = 30  # 1 FPS sampling for training data
+
+# Jersey number detection
+NUMBER_IOS_THRESHOLD = 0.9  # Intersection over Smaller for number-to-player matching
+NUMBER_PADDING_PX = 10  # Padding around number boxes before OCR
+NUMBER_RECOGNITION_INTERVAL = 5  # Run OCR every N frames
+NUMBER_CONSECUTIVE_VALIDATION = 3  # Require N consecutive reads to validate
+
+# Court detection
+COURT_MASK_Y_MIN_RATIO = 0.20  # Top of court mask (% of frame height)
+COURT_MASK_Y_MAX_RATIO = 0.85  # Bottom of court mask (% of frame height)
+
+# Tracking limits
+DEFAULT_MAX_TOTAL_OBJECTS = 20  # Balance between coverage and SAM2 memory
+DEFAULT_KEYFRAME_INTERVAL = 30  # Frames between SAM2 keyframe prompts
+DEFAULT_IOU_THRESHOLD = 0.3  # IoU threshold for box matching
+
+# Video generation
+DEFAULT_NUM_SAMPLE_FRAMES = 3  # Number of sample frames to extract
+VIDEO_CODEC = 'mp4v'  # Codec for output videos
+
+# Jersey OCR intervals
+JERSEY_OCR_INTERVAL = 30  # Run jersey detection every N frames
+
+# Path smoothing parameters (from Roboflow reference)
+PATH_JUMP_SIGMA = 3.5
+PATH_MIN_JUMP_DIST = 0.6
+PATH_MAX_JUMP_RUN = 18
+PATH_PAD_AROUND_RUNS = 2
+PATH_SMOOTH_WINDOW = 9
+PATH_SMOOTH_POLY = 2
 
 
 def compute_iou(box1, box2):
@@ -195,48 +263,6 @@ class PipelineCheckpoint:
         if not completed:
             return "No stages completed"
         return f"Completed: {', '.join(completed)}"
-
-
-class ConsecutiveValueTracker:
-    """
-    Tracks values over time and validates them based on consecutive occurrences.
-    A value is only confirmed after appearing n_consecutive times in a row.
-    """
-
-    def __init__(self, n_consecutive: int = 3):
-        self.n_consecutive = n_consecutive
-        self._current_values: Dict[int, str] = {}
-        self._consecutive_counts: Dict[int, int] = {}
-        self._validated_values: Dict[int, str] = {}
-
-    def update(self, tracker_ids: List[int], values: List) -> None:
-        """Update tracker with new observations."""
-        for tracker_id, value in zip(tracker_ids, values):
-            if tracker_id in self._validated_values:
-                continue
-
-            if self._current_values.get(tracker_id) == value:
-                self._consecutive_counts[tracker_id] = self._consecutive_counts.get(tracker_id, 0) + 1
-            else:
-                self._current_values[tracker_id] = value
-                self._consecutive_counts[tracker_id] = 1
-
-            if self._consecutive_counts[tracker_id] >= self.n_consecutive:
-                self._validated_values[tracker_id] = value
-
-    def get_validated(self, tracker_ids: List[int]) -> List:
-        """Get validated values for given tracker IDs."""
-        return [self._validated_values.get(tid) for tid in tracker_ids]
-
-    def get_all_validated(self) -> Dict[int, str]:
-        """Get all validated values."""
-        return self._validated_values.copy()
-
-    def reset(self) -> None:
-        """Reset all tracking state."""
-        self._current_values.clear()
-        self._consecutive_counts.clear()
-        self._validated_values.clear()
 
 
 class PlayerTracker:

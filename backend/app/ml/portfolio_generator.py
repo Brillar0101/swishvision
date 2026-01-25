@@ -23,6 +23,29 @@ from app.ml.ui_config import (
     put_text_pil, add_title_bar, create_player_label, add_stats_overlay
 )
 
+# ============================================================================
+# CONSTANTS
+# ============================================================================
+
+# Video generation
+DISTINCT_COLORS_COUNT = 20  # Number of distinct colors for object IDs
+BOX_ANNOTATOR_THICKNESS = 2
+MASK_OVERLAY_ALPHA = 0.5  # Segmentation stage
+TEAM_OVERLAY_ALPHA = 0.4  # Team/jersey stages
+BOX_THICKNESS = 3  # Bounding box thickness for teams/jersey
+CONTOUR_THICKNESS = 2  # Mask contour thickness
+
+# Tactical view dimensions (16:9 aspect ratio)
+TACTICAL_VIDEO_WIDTH = 1280
+TACTICAL_VIDEO_HEIGHT = 720
+
+# Label positioning offsets
+LABEL_OFFSET_Y = 35  # Offset above box for ID labels
+LABEL_OFFSET_Y_SMALL = 40  # Offset for title labels
+
+# Color generation
+HUE_MAX = 180  # Maximum hue value for HSV
+
 
 def mask_to_box(mask):
     """Convert binary mask to bounding box."""
@@ -151,7 +174,7 @@ class PortfolioGenerator:
         writer = self._get_video_writer(output_path, fps, width, height)
 
         # Create annotators
-        box_annotator = sv.BoxAnnotator(thickness=2)
+        box_annotator = sv.BoxAnnotator(thickness=BOX_ANNOTATOR_THICKNESS)
 
         for frame_idx, frame in enumerate(frames):
             annotated = frame.copy()
@@ -185,7 +208,7 @@ class PortfolioGenerator:
         writer = self._get_video_writer(output_path, fps, width, height)
 
         # Generate distinct colors for each object
-        colors = self._generate_distinct_colors(20)
+        colors = self._generate_distinct_colors(DISTINCT_COLORS_COUNT)
 
         for frame_idx, frame in enumerate(frames):
             annotated = frame.copy()
@@ -201,19 +224,19 @@ class PortfolioGenerator:
                     # Draw colored mask
                     mask_colored = np.zeros_like(annotated)
                     mask_colored[mask_2d] = color
-                    annotated = cv2.addWeighted(annotated, 1.0, mask_colored, 0.5, 0)
+                    annotated = cv2.addWeighted(annotated, 1.0, mask_colored, MASK_OVERLAY_ALPHA, 0)
 
                     # Draw outline
                     contours, _ = cv2.findContours(
                         mask_2d.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
                     )
-                    cv2.drawContours(annotated, contours, -1, color, 2)
+                    cv2.drawContours(annotated, contours, -1, color, CONTOUR_THICKNESS)
 
                     # Add object ID with professional label
                     box = mask_to_box(mask)
                     if box:
                         x1, y1 = int(box[0]), int(box[1])
-                        annotated = put_text_pil(annotated, f"ID:{obj_id}", (x1, y1 - 35),
+                        annotated = put_text_pil(annotated, f"ID:{obj_id}", (x1, y1 - LABEL_OFFSET_Y),
                                                 font_size=TextSize.LABEL, color=Colors.WHITE,
                                                 bg_color=color, padding=6)
 
@@ -260,13 +283,13 @@ class PortfolioGenerator:
                     # Draw colored mask
                     mask_colored = np.zeros_like(annotated)
                     mask_colored[mask_2d] = color
-                    annotated = cv2.addWeighted(annotated, 1.0, mask_colored, 0.4, 0)
+                    annotated = cv2.addWeighted(annotated, 1.0, mask_colored, TEAM_OVERLAY_ALPHA, 0)
 
                     # Draw bounding box with professional styling
                     box = mask_to_box(mask)
                     if box:
                         x1, y1, x2, y2 = int(box[0]), int(box[1]), int(box[2]), int(box[3])
-                        cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 3)
+                        cv2.rectangle(annotated, (x1, y1), (x2, y2), color, BOX_THICKNESS)
 
                         # Add team label with professional styling
                         label = team_name
@@ -327,13 +350,13 @@ class PortfolioGenerator:
                     # Draw colored mask
                     mask_colored = np.zeros_like(annotated)
                     mask_colored[mask_2d] = color
-                    annotated = cv2.addWeighted(annotated, 1.0, mask_colored, 0.4, 0)
+                    annotated = cv2.addWeighted(annotated, 1.0, mask_colored, TEAM_OVERLAY_ALPHA, 0)
 
                     # Draw bounding box with thicker lines
                     box = mask_to_box(mask)
                     if box:
                         x1, y1, x2, y2 = int(box[0]), int(box[1]), int(box[2]), int(box[3])
-                        cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 3)
+                        cv2.rectangle(annotated, (x1, y1), (x2, y2), color, BOX_THICKNESS)
 
                         # Create professional label with jersey number and player name
                         if jersey_number and player_name:
@@ -370,11 +393,7 @@ class PortfolioGenerator:
         """Generate video showing tactical 2D court view (full screen)."""
         output_path = os.path.join(output_dir, "stage5_tactical.mp4")
 
-        # Tactical view dimensions (16:9 aspect ratio scaled from court)
-        tactical_width = 1280
-        tactical_height = 720
-
-        writer = self._get_video_writer(output_path, fps, tactical_width, tactical_height)
+        writer = self._get_video_writer(output_path, fps, TACTICAL_VIDEO_WIDTH, TACTICAL_VIDEO_HEIGHT)
 
         for frame_idx, frame in enumerate(frames):
             # Build transformer from frame
@@ -407,7 +426,7 @@ class PortfolioGenerator:
             )
 
             # Resize tactical view to output dimensions
-            tactical_resized = cv2.resize(tactical, (tactical_width, tactical_height))
+            tactical_resized = cv2.resize(tactical, (TACTICAL_VIDEO_WIDTH, TACTICAL_VIDEO_HEIGHT))
 
             # Add stage label
             self._add_stage_label(tactical_resized, "Stage 5: Tactical 2D View (Homography Transform)")
@@ -463,13 +482,13 @@ class PortfolioGenerator:
                     # Draw colored mask
                     mask_colored = np.zeros_like(annotated)
                     mask_colored[mask_2d] = color
-                    annotated = cv2.addWeighted(annotated, 1.0, mask_colored, 0.4, 0)
+                    annotated = cv2.addWeighted(annotated, 1.0, mask_colored, TEAM_OVERLAY_ALPHA, 0)
 
                     # Draw bounding box with professional styling
                     box = mask_to_box(mask)
                     if box:
                         x1, y1, x2, y2 = int(box[0]), int(box[1]), int(box[2]), int(box[3])
-                        cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 3)
+                        cv2.rectangle(annotated, (x1, y1), (x2, y2), color, BOX_THICKNESS)
 
                         # Create professional label
                         jersey_number = info.get('jersey_number')
@@ -532,7 +551,7 @@ class PortfolioGenerator:
         """Generate n visually distinct colors."""
         colors = []
         for i in range(n):
-            hue = int(180 * i / n)
+            hue = int(HUE_MAX * i / n)
             hsv = np.uint8([[[hue, 255, 255]]])
             bgr = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)[0][0]
             colors.append(tuple(int(c) for c in bgr))

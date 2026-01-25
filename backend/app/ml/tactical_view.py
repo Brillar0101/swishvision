@@ -52,6 +52,21 @@ TEAM_COLORS = {
     -1: (0, 255, 255), # YELLOW for referees
 }
 
+# Homography parameters
+MIN_LANDMARKS_FOR_HOMOGRAPHY = 4  # Minimum anchor points needed
+
+# Court rendering
+COURT_DEFAULT_WIDTH = 940
+COURT_DEFAULT_HEIGHT = 500
+COURT_FALLBACK_BG_COLOR = (180, 120, 60)  # Blue background (BGR)
+COURT_OUTLINE_COLOR = (255, 255, 255)  # White
+COURT_CENTER_CIRCLE_RADIUS = 60
+
+# Tactical view overlay
+TACTICAL_OVERLAY_SCALE = 0.35  # Relative to frame width
+TACTICAL_OVERLAY_MARGIN = 15  # Pixels
+TACTICAL_OVERLAY_BORDER_THICKNESS = 3
+
 
 def get_positions_from_detections(
     detections: sv.Detections,
@@ -180,7 +195,7 @@ class TacticalView:
             # Filter to high-confidence anchor points
             landmarks_mask = key_points.confidence[0] > self.anchor_confidence
 
-            if np.count_nonzero(landmarks_mask) >= 4:
+            if np.count_nonzero(landmarks_mask) >= MIN_LANDMARKS_FOR_HOMOGRAPHY:
                 # Get court landmarks from config (real-world coordinates)
                 court_landmarks = np.array(self.config.vertices)[landmarks_mask]
                 # Get frame landmarks (pixel coordinates)
@@ -325,7 +340,7 @@ class TacticalView:
         return court_img
 
 
-def draw_court(config=None, width: int = 940, height: int = 500) -> np.ndarray:
+def draw_court(config=None, width: int = COURT_DEFAULT_WIDTH, height: int = COURT_DEFAULT_HEIGHT) -> np.ndarray:
     """
     Draw an NBA basketball court.
 
@@ -346,16 +361,16 @@ def draw_court(config=None, width: int = 940, height: int = 500) -> np.ndarray:
 
     # Fallback: draw simple court
     court = np.ones((height, width, 3), dtype=np.uint8)
-    court[:, :] = (180, 120, 60)  # Blue background
+    court[:, :] = COURT_FALLBACK_BG_COLOR
 
     # Court outline
-    cv2.rectangle(court, (10, 10), (width - 10, height - 10), (255, 255, 255), 2)
+    cv2.rectangle(court, (10, 10), (width - 10, height - 10), COURT_OUTLINE_COLOR, 2)
 
     # Center line
-    cv2.line(court, (width // 2, 10), (width // 2, height - 10), (255, 255, 255), 2)
+    cv2.line(court, (width // 2, 10), (width // 2, height - 10), COURT_OUTLINE_COLOR, 2)
 
     # Center circle
-    cv2.circle(court, (width // 2, height // 2), 60, (255, 255, 255), 2)
+    cv2.circle(court, (width // 2, height // 2), COURT_CENTER_CIRCLE_RADIUS, COURT_OUTLINE_COLOR, 2)
 
     return court
 
@@ -364,7 +379,7 @@ def create_combined_view(
     frame: np.ndarray,
     tactical_view: np.ndarray,
     position: str = 'bottom-right',
-    scale_factor: float = 0.35,
+    scale_factor: float = TACTICAL_OVERLAY_SCALE,
 ) -> np.ndarray:
     """
     Overlay tactical view on video frame.
@@ -392,22 +407,23 @@ def create_combined_view(
 
     # Create copy of frame
     combined = frame.copy()
-    margin = 15
 
     # Calculate position
     if 'right' in position:
-        x = fw - ntw - margin
+        x = fw - ntw - TACTICAL_OVERLAY_MARGIN
     else:
-        x = margin
+        x = TACTICAL_OVERLAY_MARGIN
 
     if 'bottom' in position:
-        y = fh - nth - margin
+        y = fh - nth - TACTICAL_OVERLAY_MARGIN
     else:
-        y = margin
+        y = TACTICAL_OVERLAY_MARGIN
 
     # Add professional border
     border_color = Colors.WHITE if UI_CONFIG_AVAILABLE else (255, 255, 255)
-    cv2.rectangle(combined, (x - 3, y - 3), (x + ntw + 3, y + nth + 3), border_color, 3)
+    cv2.rectangle(combined, (x - TACTICAL_OVERLAY_BORDER_THICKNESS, y - TACTICAL_OVERLAY_BORDER_THICKNESS),
+                  (x + ntw + TACTICAL_OVERLAY_BORDER_THICKNESS, y + nth + TACTICAL_OVERLAY_BORDER_THICKNESS),
+                  border_color, TACTICAL_OVERLAY_BORDER_THICKNESS)
 
     # Overlay tactical view
     combined[y:y + nth, x:x + ntw] = tactical_resized

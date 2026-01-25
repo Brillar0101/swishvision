@@ -18,6 +18,31 @@ import supervision as sv
 
 from app.ml.team_rosters import TEAM_ROSTERS, get_player_name
 
+# ============================================================================
+# CONSTANTS
+# ============================================================================
+
+# Model IDs
+PLAYER_DETECTION_MODEL_ID = "basketball-player-detection-3-ycjdo/4"
+NUMBER_OCR_MODEL_ID = "basketball-jersey-numbers-ocr/3"
+
+# Detection parameters
+DETECTION_CONFIDENCE = 0.4
+DETECTION_IOU_THRESHOLD = 0.9
+
+# Number-to-player matching
+IOS_THRESHOLD = 0.9  # Intersection over Smaller threshold
+NUMBER_PADDING_PX = 10  # Padding around number boxes for OCR
+NUMBER_PADDING_PY = 10
+
+# Validation
+CONSECUTIVE_VALIDATION_FRAMES = 3  # Require N consecutive reads to validate
+NUMBER_CLASS_ID = 2  # Class ID for 'number' in RF-DETR model
+
+# OCR
+OCR_PROMPT = "Read the number."
+OCR_IMAGE_SIZE = (224, 224)  # Resize crops to this size for OCR
+
 
 class ConsecutiveValueTracker:
     """
@@ -73,11 +98,11 @@ class JerseyDetector:
 
     def __init__(
         self,
-        detection_model_id: str = "basketball-player-detection-3-ycjdo/4",
-        ocr_model_id: str = "basketball-jersey-numbers-ocr/3",
-        detection_confidence: float = 0.4,
-        iou_threshold: float = 0.9,
-        n_consecutive: int = 3,
+        detection_model_id: str = PLAYER_DETECTION_MODEL_ID,
+        ocr_model_id: str = NUMBER_OCR_MODEL_ID,
+        detection_confidence: float = DETECTION_CONFIDENCE,
+        iou_threshold: float = DETECTION_IOU_THRESHOLD,
+        n_consecutive: int = CONSECUTIVE_VALIDATION_FRAMES,
         ocr_interval: int = 5,
     ):
         self.detection_model_id = detection_model_id
