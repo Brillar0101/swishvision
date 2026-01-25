@@ -14,7 +14,13 @@ import pickle
 import json
 from tqdm import tqdm
 
-from sam2.build_sam import build_sam2_video_predictor, build_sam2_camera_predictor
+from sam2.build_sam import build_sam2_video_predictor
+try:
+    from sam2.build_sam import build_sam2_camera_predictor
+    CAMERA_PREDICTOR_AVAILABLE = True
+except ImportError:
+    CAMERA_PREDICTOR_AVAILABLE = False
+    print("Warning: SAM2 camera predictor not available, will use batch mode")
 
 from app.ml.player_referee_detector import PlayerRefereeDetector
 from app.ml.court_detector import CourtDetector
@@ -1043,7 +1049,7 @@ class PlayerTracker:
                     use_autocast = self.device.type == "cuda"
                     autocast_dtype = torch.float16 if use_autocast else torch.float32
 
-                    if use_streaming_sam2:
+                    if use_streaming_sam2 and CAMERA_PREDICTOR_AVAILABLE:
                         # ============ Streaming Mode: Frame-by-frame camera predictor ============
                         print("Using SAM2 streaming camera predictor (lower memory)...")
                         predictor = build_sam2_camera_predictor(
@@ -1116,7 +1122,11 @@ class PlayerTracker:
 
                     else:
                         # ============ Batch Mode: Video predictor (original implementation) ============
-                        print("Using SAM2 batch video predictor...")
+                        if use_streaming_sam2 and not CAMERA_PREDICTOR_AVAILABLE:
+                            print("Warning: Streaming mode requested but camera predictor not available")
+                            print("Falling back to batch video predictor...")
+                        else:
+                            print("Using SAM2 batch video predictor...")
                         predictor = build_sam2_video_predictor(
                             config_file=f"configs/sam2.1/{self.sam2_config}.yaml",
                             ckpt_path=self.sam2_checkpoint,
