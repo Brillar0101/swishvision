@@ -14,7 +14,7 @@ import pickle
 import json
 from tqdm import tqdm
 
-from sam2.build_sam import build_sam2_video_predictor
+from sam2.build_sam import build_sam2_video_predictor, build_sam2_camera_predictor
 
 from app.ml.player_referee_detector import PlayerRefereeDetector
 from app.ml.court_detector import CourtDetector
@@ -787,6 +787,7 @@ class PlayerTracker:
         clear_checkpoints: bool = False,
         use_bytetrack: bool = False,
         use_sam2_segmentation: bool = False,
+        use_streaming_sam2: bool = False,
         stages_to_generate: List[int] = None,
     ) -> Dict:
         """
@@ -1038,53 +1039,128 @@ class PlayerTracker:
                 if use_sam2_segmentation:
                     print("Adding SAM2 segmentation to ByteTrack results...")
                     print("Loading SAM2 model...")
-                    predictor = build_sam2_video_predictor(
-                        config_file=f"configs/sam2.1/{self.sam2_config}.yaml",
-                        ckpt_path=self.sam2_checkpoint,
-                        device=self.device,
-                    )
 
                     use_autocast = self.device.type == "cuda"
                     autocast_dtype = torch.float16 if use_autocast else torch.float32
 
-                    with torch.inference_mode(), torch.amp.autocast(device_type="cuda", dtype=autocast_dtype, enabled=use_autocast):
-                        inference_state = predictor.init_state(video_path=frames_dir)
+                    if use_streaming_sam2:
+                        # ============ Streaming Mode: Frame-by-frame camera predictor ============
+                        print("Using SAM2 streaming camera predictor (lower memory)...")
+                        predictor = build_sam2_camera_predictor(
+                            config_file=f"configs/sam2.1/{self.sam2_config}.yaml",
+                            ckpt_path=self.sam2_checkpoint,
+                            device=self.device,
+                        )
 
-                        # Add all tracked objects to SAM2 at their first appearance
-                        tracker_first_frame = {}
-                        for frame_idx, detections in bytetrack_detections.items():
-                            if len(detections) == 0 or detections.tracker_id is None:
-                                continue
-                            for i in range(len(detections)):
-                                tracker_id = int(detections.tracker_id[i])
-                                if tracker_id not in tracker_first_frame:
-                                    tracker_first_frame[tracker_id] = frame_idx
-                                    box = detections.xyxy[i].tolist()
-                                    box_np = np.array([[box[0], box[1], box[2], box[3]]], dtype=np.float32)
-                                    predictor.add_new_points_or_box(
-                                        inference_state=inference_state,
-                                        frame_idx=frame_idx,
-                                        obj_id=tracker_id,
-                                        box=box_np,
-                                    )
-
-                        print(f"Propagating SAM2 masks for {len(tracker_first_frame)} objects...")
+                        prompted_ids = set()
                         video_segments = {}
-                        pbar = tqdm(total=frame_count, desc="SAM2 mask propagation")
 
-                        for out_frame_idx, out_obj_ids, out_mask_logits in predictor.propagate_in_video(inference_state):
-                            masks_dict = {}
-                            for i in range(len(out_obj_ids)):
-                                obj_id = int(out_obj_ids[i])
-                                mask = (out_mask_logits[i] > 0.0).cpu().numpy()
-                                mask = filter_segments_by_distance(mask, relative_distance=0.03)
-                                masks_dict[obj_id] = mask
-                                box = mask_to_box(mask)
-                                if box is not None:
-                                    current_boxes[obj_id] = box
-                            video_segments[out_frame_idx] = masks_dict
-                            pbar.update(1)
-                        pbar.close()
+                        with torch.inference_mode(), torch.amp.autocast(device_type="cuda", dtype=autocast_dtype, enabled=use_autocast):
+                            for frame_idx in tqdm(range(len(frames)), desc="SAM2 streaming tracking"):
+                                frame = frames[frame_idx]
+                                detections = bytetrack_detections.get(frame_idx, sv.Detections.empty())
+
+                                if len(detections) == 0 or detections.tracker_id is None:
+                                    video_segments[frame_idx] = {}
+                                    continue
+
+                                # Load first frame
+                                if frame_idx == 0:
+                                    predictor.load_first_frame(frame)
+
+                                # Find new tracker IDs and prompt SAM2
+                                current_ids = set(detections.tracker_id.tolist())
+                                new_ids = current_ids - prompted_ids
+
+                                if new_ids:
+                                    for i in range(len(detections)):
+                                        tracker_id = int(detections.tracker_id[i])
+                                        if tracker_id in new_ids:
+                                            bbox = np.array([detections.xyxy[i]], dtype=np.float32)
+                                            predictor.add_new_prompt(
+                                                frame_idx=0,  # Always 0 for camera predictor
+                                                obj_id=tracker_id,
+                                                bbox=bbox,
+                                            )
+                                            prompted_ids.add(tracker_id)
+
+                                # Track all prompted objects in this frame
+                                if prompted_ids:
+                                    tracker_ids, mask_logits = predictor.track(frame)
+
+                                    if len(tracker_ids) > 0:
+                                        # Convert SAM2 output to masks
+                                        tracker_ids_np = np.asarray(tracker_ids, dtype=np.int32)
+                                        masks = (mask_logits > 0.0).cpu().numpy()
+                                        masks = np.squeeze(masks).astype(bool)
+
+                                        if masks.ndim == 2:
+                                            masks = masks[None, ...]
+
+                                        # Clean masks
+                                        masks_dict = {}
+                                        for i, obj_id in enumerate(tracker_ids_np):
+                                            mask = filter_segments_by_distance(masks[i], relative_distance=0.03)
+                                            masks_dict[int(obj_id)] = mask
+                                            box = mask_to_box(mask)
+                                            if box is not None:
+                                                current_boxes[int(obj_id)] = box
+
+                                        video_segments[frame_idx] = masks_dict
+                                    else:
+                                        video_segments[frame_idx] = {}
+                                else:
+                                    video_segments[frame_idx] = {}
+
+                        print(f"Completed streaming SAM2 for {len(prompted_ids)} objects")
+
+                    else:
+                        # ============ Batch Mode: Video predictor (original implementation) ============
+                        print("Using SAM2 batch video predictor...")
+                        predictor = build_sam2_video_predictor(
+                            config_file=f"configs/sam2.1/{self.sam2_config}.yaml",
+                            ckpt_path=self.sam2_checkpoint,
+                            device=self.device,
+                        )
+
+                        with torch.inference_mode(), torch.amp.autocast(device_type="cuda", dtype=autocast_dtype, enabled=use_autocast):
+                            inference_state = predictor.init_state(video_path=frames_dir)
+
+                            # Add all tracked objects to SAM2 at their first appearance
+                            tracker_first_frame = {}
+                            for frame_idx, detections in bytetrack_detections.items():
+                                if len(detections) == 0 or detections.tracker_id is None:
+                                    continue
+                                for i in range(len(detections)):
+                                    tracker_id = int(detections.tracker_id[i])
+                                    if tracker_id not in tracker_first_frame:
+                                        tracker_first_frame[tracker_id] = frame_idx
+                                        box = detections.xyxy[i].tolist()
+                                        box_np = np.array([[box[0], box[1], box[2], box[3]]], dtype=np.float32)
+                                        predictor.add_new_points_or_box(
+                                            inference_state=inference_state,
+                                            frame_idx=frame_idx,
+                                            obj_id=tracker_id,
+                                            box=box_np,
+                                        )
+
+                            print(f"Propagating SAM2 masks for {len(tracker_first_frame)} objects...")
+                            video_segments = {}
+                            pbar = tqdm(total=frame_count, desc="SAM2 mask propagation")
+
+                            for out_frame_idx, out_obj_ids, out_mask_logits in predictor.propagate_in_video(inference_state):
+                                masks_dict = {}
+                                for i in range(len(out_obj_ids)):
+                                    obj_id = int(out_obj_ids[i])
+                                    mask = (out_mask_logits[i] > 0.0).cpu().numpy()
+                                    mask = filter_segments_by_distance(mask, relative_distance=0.03)
+                                    masks_dict[obj_id] = mask
+                                    box = mask_to_box(mask)
+                                    if box is not None:
+                                        current_boxes[obj_id] = box
+                                video_segments[out_frame_idx] = masks_dict
+                                pbar.update(1)
+                            pbar.close()
                 else:
                     # No SAM2: use bounding box masks
                     print("Using bounding box masks (no SAM2 segmentation)...")
