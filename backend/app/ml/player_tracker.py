@@ -1008,6 +1008,32 @@ class PlayerTracker:
                 if len(tracking_info) == 0:
                     return {"error": "No players detected"}
 
+                # Limit to most frequently appearing objects (prevents OOM with SAM2)
+                if len(tracking_info) > max_total_objects:
+                    print(f"  Limiting from {len(tracking_info)} to {max_total_objects} most frequent objects...")
+                    # Count frame appearances for each tracker_id
+                    tracker_frame_counts = {tid: 0 for tid in tracking_info.keys()}
+                    for frame_detections in bytetrack_detections.values():
+                        if len(frame_detections) > 0 and frame_detections.tracker_id is not None:
+                            for tid in frame_detections.tracker_id:
+                                if int(tid) in tracker_frame_counts:
+                                    tracker_frame_counts[int(tid)] += 1
+
+                    # Keep top N most frequent
+                    top_trackers = sorted(tracker_frame_counts.keys(),
+                                         key=lambda x: tracker_frame_counts[x],
+                                         reverse=True)[:max_total_objects]
+
+                    # Filter tracking_info and bytetrack_detections
+                    tracking_info = {tid: tracking_info[tid] for tid in top_trackers}
+                    for frame_idx in bytetrack_detections:
+                        detections = bytetrack_detections[frame_idx]
+                        if len(detections) > 0 and detections.tracker_id is not None:
+                            keep_mask = np.isin(detections.tracker_id, top_trackers)
+                            bytetrack_detections[frame_idx] = detections[keep_mask]
+
+                    print(f"  Kept {len(tracking_info)} objects (avg {sum(tracker_frame_counts[t] for t in top_trackers)/len(top_trackers):.1f} frames each)")
+
                 # Step 2: Optionally add SAM2 segmentation
                 if use_sam2_segmentation:
                     print("Adding SAM2 segmentation to ByteTrack results...")
