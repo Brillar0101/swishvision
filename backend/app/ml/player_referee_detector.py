@@ -82,8 +82,8 @@ class PlayerRefereeDetector:
         # Tracker for persistent IDs
         self.tracker = sv.ByteTrack(
             track_activation_threshold=0.25,
-            lost_track_buffer=60,  # Keep tracking for 2 sec if lost
-            minimum_matching_threshold=0.8,
+            lost_track_buffer=300,  # Keep tracking for 10 sec if lost (allows players to exit/re-enter)
+            minimum_matching_threshold=0.7,  # Lower threshold for better re-association
             frame_rate=30,
             minimum_consecutive_frames=1
         )
