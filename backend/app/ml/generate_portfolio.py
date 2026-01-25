@@ -105,8 +105,8 @@ def generate_portfolio_videos(
     cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
     detector.tracker = sv.ByteTrack(
         track_activation_threshold=0.25,
-        lost_track_buffer=60,
-        minimum_matching_threshold=0.8,
+        lost_track_buffer=300,  # Keep tracking for 10 sec if lost
+        minimum_matching_threshold=0.7,  # Lower threshold for better re-association
         frame_rate=30,
         minimum_consecutive_frames=1
     )
