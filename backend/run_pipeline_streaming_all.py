@@ -1,5 +1,5 @@
 """
-Run full SwishVision pipeline locally with streaming SAM2.
+Run full 6-stage SwishVision pipeline with streaming SAM2.
 
 Pipeline: RF-DETR detection → ByteTrack tracking → SAM2 streaming segmentation
 """
@@ -11,7 +11,7 @@ tracker = PlayerTracker()
 # Swap teams to fix incorrect assignment
 tracker.team_classifier.swap_teams()
 
-# Run full pipeline with streaming SAM2
+# Run full 6-stage pipeline with streaming SAM2
 result = tracker.process_video_with_tracking(
     video_path='../test_videos/test_game.mp4',
     output_dir='portfolio_outputs_streaming',
@@ -19,10 +19,8 @@ result = tracker.process_video_with_tracking(
     use_bytetrack=True,              # ByteTrack for persistent IDs
     use_sam2_segmentation=True,      # SAM2 for pixel-perfect masks
     use_streaming_sam2=True,         # Streaming mode (lower memory)
-    stages_to_generate=[1, 2],       # Start with first 2 stages
-    resume=False
+    resume=True                      # Resume from existing progress
 )
 
 print('\n=== Pipeline Complete ===')
 print('Stage videos:', result.get('stage_videos', {}))
-print('\nIf stages 1-2 look good, resume with stages_to_generate=[3,4,5,6]')
