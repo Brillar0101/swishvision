@@ -23,7 +23,7 @@ result = tracker.process_video_with_tracking(
     max_total_objects=20,            # Track up to 20 objects (balance between coverage and memory)
     use_court_mask_filter=True,      # Filter to only on-court detections
     max_seconds=15.0,                # Process first 15 seconds to test memory usage
-    resume=False                     # Start fresh (set to True to resume from checkpoint)
+    resume=True                      # Resume from checkpoint (set to False to start fresh)
 )
 
 print('\n=== Pipeline Complete ===')
