@@ -11,8 +11,8 @@ print("=" * 60)
 print("Testing with 10 seconds of video...")
 print()
 
-# Initialize tracker with CPU device to avoid MPS compatibility issues
-tracker = PlayerTracker(device="cpu")
+# Initialize tracker with CUDA device (cluster has GPUs)
+tracker = PlayerTracker(device="cuda")
 
 # Run pipeline WITH SAM2 camera predictor
 result = tracker.process_video_with_tracking(
