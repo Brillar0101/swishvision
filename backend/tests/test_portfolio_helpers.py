@@ -151,17 +151,19 @@ class TestDrawPlayerAnnotation:
         mask = np.zeros((100, 100), dtype=bool)
         mask[40:60, 30:70] = True
 
-        color = (0, 0, 255)
-        label = "Alpha Test"
+        color = (0, 0, 255)  # Red color
 
-        # Test with different alphas
-        result_low = draw_player_annotation(frame, mask, color, label, alpha=0.2)
-        result_high = draw_player_annotation(frame, mask, color, label, alpha=0.8)
+        # Test with different alphas (without box to avoid label overlap)
+        result_low = draw_player_annotation(frame.copy(), mask, color, "", alpha=0.2, draw_box=False)
+        result_high = draw_player_annotation(frame.copy(), mask, color, "", alpha=0.8, draw_box=False)
 
-        # High alpha should have more pronounced color
-        pixel_low = result_low[50, 50, 2]  # Red channel
+        # High alpha should have more pronounced color in the mask area
+        pixel_low = result_low[50, 50, 2]  # Red channel (center of mask)
         pixel_high = result_high[50, 50, 2]  # Red channel
 
+        assert pixel_high > pixel_low
+        # Also verify both are different from original
+        assert pixel_low > 100
         assert pixel_high > pixel_low
 
     def test_annotation_with_empty_mask(self):
