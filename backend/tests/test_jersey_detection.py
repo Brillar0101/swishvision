@@ -39,10 +39,12 @@ def main():
     print()
 
     # Initialize tracker with jersey detection enabled
+    # Note: Using CPU device to avoid MPS compatibility issues with SAM2
     tracker = PlayerTracker(
         sam2_checkpoint=str(backend_path / "checkpoints" / "sam2.1_hiera_large.pt"),
         sam2_config="sam2.1_hiera_l",
         enable_jersey_detection=True,
+        device="cpu",  # Force CPU to avoid MPS/SAM2 datatype issues on Apple Silicon
     )
 
     # Process video
