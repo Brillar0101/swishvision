@@ -732,7 +732,7 @@ class PlayerTracker:
                 stage6 = cv2.resize(stage6, (width, height))
             else:
                 # Fallback: draw empty court
-                stage6 = draw_court(width, height)
+                stage6 = draw_court(width=width, height=height)
                 cv2.putText(stage6, "Court keypoints not detected", (width//4, height//2),
                            cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
             self._add_stage_label(stage6, "Stage 6: Tactical 2D View (Homography Transform)")
