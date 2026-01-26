@@ -109,8 +109,8 @@ class PlayerRefereeDetector:
             )
 
         print(f"Loading RF-DETR from: {self.checkpoint_path}")
-        self.model = RFDETRBase()
-        self.model.load(str(self.checkpoint_path))
+        # Load fine-tuned checkpoint by passing it to the constructor
+        self.model = RFDETRBase(str(self.checkpoint_path))
         self._use_rfdetr = True
         print("Using fine-tuned RF-DETR for detection")
 
