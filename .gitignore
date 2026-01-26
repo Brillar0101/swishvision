@@ -54,3 +54,7 @@ checkpoints/
 *.bak
 .cache/
 torch_cache/
+
+# SAM2 installation files (temporary, for cluster setup only)
+backend/sam2_camera_predictor.py
+backend/install_sam2_camera_predictor.sh
