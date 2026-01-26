@@ -1216,7 +1216,7 @@ class PlayerTracker:
 
                     if use_streaming_sam2 and CAMERA_PREDICTOR_AVAILABLE:
                         # ============ Streaming Mode: Frame-by-frame camera predictor ============
-                        print("Using SAM2 streaming camera predictor (lower memory)...")
+                        print("Using SAM2 streaming camera predictor (immediate start)...")
                         predictor = build_sam2_camera_predictor(
                             config_file=f"configs/sam2.1/{self.sam2_config}.yaml",
                             ckpt_path=self.sam2_checkpoint,
@@ -1224,6 +1224,8 @@ class PlayerTracker:
                         )
 
                         prompted_ids = set()
+                        temp_id_to_real_id = {}  # Map temp IDs to real ByteTrack IDs
+                        next_temp_id = -1  # Use negative IDs for temporary tracking
                         video_segments = {}
 
                         with torch.inference_mode(), torch.amp.autocast(device_type=self.device.type, dtype=autocast_dtype, enabled=use_autocast):
@@ -1231,7 +1233,7 @@ class PlayerTracker:
                                 frame = frames[frame_idx]
                                 detections = bytetrack_detections.get(frame_idx, sv.Detections.empty())
 
-                                if len(detections) == 0 or detections.tracker_id is None:
+                                if len(detections) == 0:
                                     video_segments[frame_idx] = {}
                                     continue
 
@@ -1239,21 +1241,39 @@ class PlayerTracker:
                                 if frame_idx == 0:
                                     predictor.load_first_frame(frame)
 
-                                # Find new tracker IDs and prompt SAM2
-                                current_ids = set(detections.tracker_id.tolist())
-                                new_ids = current_ids - prompted_ids
+                                # Determine which IDs to use for this frame
+                                has_stable_ids = detections.tracker_id is not None
 
-                                if new_ids:
+                                if has_stable_ids:
+                                    # Use real ByteTrack IDs
+                                    current_ids = set(detections.tracker_id.tolist())
+                                    new_ids = current_ids - prompted_ids
+
+                                    if new_ids:
+                                        for i in range(len(detections)):
+                                            tracker_id = int(detections.tracker_id[i])
+                                            if tracker_id in new_ids:
+                                                bbox = np.array([detections.xyxy[i]], dtype=np.float32)
+                                                predictor.add_new_prompt(
+                                                    frame_idx=0,
+                                                    obj_id=tracker_id,
+                                                    bbox=bbox,
+                                                )
+                                                prompted_ids.add(tracker_id)
+                                else:
+                                    # Use temporary IDs for early frames (before ByteTrack stabilizes)
+                                    # Prompt all detections immediately so SAM2 starts from frame 0
                                     for i in range(len(detections)):
-                                        tracker_id = int(detections.tracker_id[i])
-                                        if tracker_id in new_ids:
-                                            bbox = np.array([detections.xyxy[i]], dtype=np.float32)
-                                            predictor.add_new_prompt(
-                                                frame_idx=0,  # Always 0 for camera predictor
-                                                obj_id=tracker_id,
-                                                bbox=bbox,
-                                            )
-                                            prompted_ids.add(tracker_id)
+                                        bbox = np.array([detections.xyxy[i]], dtype=np.float32)
+                                        temp_id = next_temp_id
+                                        next_temp_id -= 1
+
+                                        predictor.add_new_prompt(
+                                            frame_idx=0,
+                                            obj_id=temp_id,
+                                            bbox=bbox,
+                                        )
+                                        prompted_ids.add(temp_id)
 
                                 # Track all prompted objects in this frame
                                 if prompted_ids:
@@ -1268,14 +1288,18 @@ class PlayerTracker:
                                         if masks.ndim == 2:
                                             masks = masks[None, ...]
 
-                                        # Clean masks
+                                        # Clean masks and store with appropriate IDs
                                         masks_dict = {}
                                         for i, obj_id in enumerate(tracker_ids_np):
                                             mask = filter_segments_by_distance(masks[i], relative_distance=SAM2_MASK_FILTER_RELATIVE_DISTANCE)
-                                            masks_dict[int(obj_id)] = mask
+
+                                            # Use real ID if available, otherwise temp ID
+                                            final_id = temp_id_to_real_id.get(int(obj_id), int(obj_id))
+                                            masks_dict[final_id] = mask
+
                                             box = mask_to_box(mask)
                                             if box is not None:
-                                                current_boxes[int(obj_id)] = box
+                                                current_boxes[final_id] = box
 
                                         video_segments[frame_idx] = masks_dict
                                     else:
@@ -1283,7 +1307,10 @@ class PlayerTracker:
                                 else:
                                     video_segments[frame_idx] = {}
 
-                        print(f"Completed streaming SAM2 for {len(prompted_ids)} objects")
+                        # Count real IDs (positive) vs temp IDs (negative)
+                        real_ids = [id for id in prompted_ids if id > 0]
+                        temp_ids = [id for id in prompted_ids if id < 0]
+                        print(f"Completed streaming SAM2: {len(real_ids)} stable IDs, {len(temp_ids)} early-frame temp IDs")
 
                     else:
                         raise RuntimeError("SAM2 camera predictor not available. This is required for SAM2 segmentation.")

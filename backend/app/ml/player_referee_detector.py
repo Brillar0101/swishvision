@@ -93,22 +93,26 @@ class PlayerRefereeDetector:
         self.label_annotator = sv.LabelAnnotator(text_color=sv.Color.BLACK)
 
     def _load_model(self):
-        """Load Roboflow API model (as per reference notebook implementation)."""
-        from dotenv import load_dotenv
-        from inference import get_model
+        """Load fine-tuned RF-DETR model."""
+        try:
+            from rfdetr import RFDETRBase
+        except ImportError:
+            raise ImportError(
+                "rfdetr package not installed. Install with:\n"
+                "  pip install rfdetr"
+            )
 
-        load_dotenv(override=True)
+        if not self.checkpoint_path.exists():
+            raise FileNotFoundError(
+                f"RF-DETR checkpoint not found: {self.checkpoint_path}\n"
+                f"Fine-tune the model first using: python scripts/train_rfdetr.py"
+            )
 
-        api_key = os.getenv("ROBOFLOW_API_KEY")
-        if not api_key:
-            raise ValueError("ROBOFLOW_API_KEY environment variable is required")
-
-        self.model = get_model(
-            model_id="basketball-player-detection-3-ycjdo/4",
-            api_key=api_key
-        )
-        self._use_rfdetr = False
-        print("Using Roboflow API for detection")
+        print(f"Loading RF-DETR from: {self.checkpoint_path}")
+        self.model = RFDETRBase()
+        self.model.load(str(self.checkpoint_path))
+        self._use_rfdetr = True
+        print("Using fine-tuned RF-DETR for detection")
 
     def detect(self, frame: np.ndarray) -> sv.Detections:
         """
