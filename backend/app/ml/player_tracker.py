@@ -1223,68 +1223,76 @@ class PlayerTracker:
                             device=self.device,
                         )
 
-                        prompted_ids = set()
                         video_segments = {}
 
                         with torch.inference_mode(), torch.amp.autocast(device_type=self.device.type, dtype=autocast_dtype, enabled=use_autocast):
-                            # SAM2 camera predictor only allows prompting at first frame
-                            # After tracking starts, no new objects can be added
-                            # This matches the reference notebook pattern
-                            first_frame_prompted = False
+                            # Following the reference notebook pattern:
+                            # 1. Load first frame
+                            # 2. Prompt ALL detected players with IDs 1, 2, 3, ...
+                            # 3. Propagate to all subsequent frames
+                            #
+                            # SAM2 IDs are separate from ByteTrack IDs since SAM2
+                            # handles its own tracking. We'll map SAM2 masks back to
+                            # ByteTrack IDs using IoU matching.
 
+                            # Get first frame and its detections
+                            first_frame = frames[0]
+                            first_detections = bytetrack_detections.get(0, sv.Detections.empty())
+
+                            # Load first frame into SAM2
+                            predictor.load_first_frame(first_frame)
+
+                            # Prompt SAM2 with all player detections from first frame
+                            # Assign IDs 1, 2, 3, ... as per reference notebook
+                            sam2_id_to_bbox = {}  # Map SAM2 ID to initial bbox for later matching
+                            if len(first_detections) > 0:
+                                for i in range(len(first_detections)):
+                                    sam2_id = i + 1  # IDs start at 1
+                                    bbox = np.array([first_detections.xyxy[i]], dtype=np.float32)
+                                    predictor.add_new_prompt(
+                                        frame_idx=0,
+                                        obj_id=sam2_id,
+                                        bbox=bbox,
+                                    )
+                                    sam2_id_to_bbox[sam2_id] = first_detections.xyxy[i]
+                                print(f"Prompted SAM2 with {len(first_detections)} players from frame 0")
+                            else:
+                                print("Warning: No detections in frame 0 for SAM2 prompting")
+
+                            # Propagate tracking across all frames
                             for frame_idx in tqdm(range(len(frames)), desc="SAM2 streaming tracking"):
                                 frame = frames[frame_idx]
-                                detections = bytetrack_detections.get(frame_idx, sv.Detections.empty())
 
-                                if not first_frame_prompted:
-                                    # Load first frame and prompt ALL detections
-                                    predictor.load_first_frame(frame)
+                                if len(sam2_id_to_bbox) == 0:
+                                    video_segments[frame_idx] = {}
+                                    continue
 
-                                    if len(detections) > 0 and detections.tracker_id is not None:
-                                        # Prompt with all detected players in first frame
-                                        for i in range(len(detections)):
-                                            tracker_id = int(detections.tracker_id[i])
-                                            bbox = np.array([detections.xyxy[i]], dtype=np.float32)
-                                            predictor.add_new_prompt(
-                                                frame_idx=0,
-                                                obj_id=tracker_id,
-                                                bbox=bbox,
-                                            )
-                                            prompted_ids.add(tracker_id)
-                                        print(f"Prompted SAM2 with {len(prompted_ids)} players from first frame")
+                                tracker_ids, mask_logits = predictor.track(frame)
 
-                                    first_frame_prompted = True
+                                if len(tracker_ids) > 0:
+                                    # Convert SAM2 output to masks
+                                    tracker_ids_np = np.asarray(tracker_ids, dtype=np.int32)
+                                    masks = (mask_logits > 0.0).cpu().numpy()
+                                    masks = np.squeeze(masks).astype(bool)
 
-                                # Propagate tracking for all frames (including first)
-                                if prompted_ids:
-                                    tracker_ids, mask_logits = predictor.track(frame)
+                                    if masks.ndim == 2:
+                                        masks = masks[None, ...]
 
-                                    if len(tracker_ids) > 0:
-                                        # Convert SAM2 output to masks
-                                        tracker_ids_np = np.asarray(tracker_ids, dtype=np.int32)
-                                        masks = (mask_logits > 0.0).cpu().numpy()
-                                        masks = np.squeeze(masks).astype(bool)
+                                    # Clean masks and store
+                                    masks_dict = {}
+                                    for i, obj_id in enumerate(tracker_ids_np):
+                                        mask = filter_segments_by_distance(masks[i], relative_distance=SAM2_MASK_FILTER_RELATIVE_DISTANCE)
+                                        masks_dict[int(obj_id)] = mask
 
-                                        if masks.ndim == 2:
-                                            masks = masks[None, ...]
+                                        box = mask_to_box(mask)
+                                        if box is not None:
+                                            current_boxes[int(obj_id)] = box
 
-                                        # Clean masks and store
-                                        masks_dict = {}
-                                        for i, obj_id in enumerate(tracker_ids_np):
-                                            mask = filter_segments_by_distance(masks[i], relative_distance=SAM2_MASK_FILTER_RELATIVE_DISTANCE)
-                                            masks_dict[int(obj_id)] = mask
-
-                                            box = mask_to_box(mask)
-                                            if box is not None:
-                                                current_boxes[int(obj_id)] = box
-
-                                        video_segments[frame_idx] = masks_dict
-                                    else:
-                                        video_segments[frame_idx] = {}
+                                    video_segments[frame_idx] = masks_dict
                                 else:
                                     video_segments[frame_idx] = {}
 
-                        print(f"Completed streaming SAM2: {len(prompted_ids)} tracked objects")
+                        print(f"Completed streaming SAM2: {len(sam2_id_to_bbox)} tracked objects")
 
                     else:
                         raise RuntimeError("SAM2 camera predictor not available. This is required for SAM2 segmentation.")
