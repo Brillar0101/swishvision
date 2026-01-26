@@ -26,7 +26,7 @@ result = tracker.process_video_with_tracking(
     max_total_objects=20,
     use_court_mask_filter=False,
     max_seconds=10.0,
-    resume=True
+    resume=False  # Fresh run with new fixes
 )
 
 print()
