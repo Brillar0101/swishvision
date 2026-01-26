@@ -1280,28 +1280,40 @@ class PlayerTracker:
                         video_segments = {}
 
                         with torch.inference_mode(), torch.amp.autocast(device_type=self.device.type, dtype=autocast_dtype, enabled=use_autocast):
-                            # Following the reference notebook pattern:
-                            # 1. Load first frame
-                            # 2. Prompt ALL detected players with IDs 1, 2, 3, ...
-                            # 3. Propagate to all subsequent frames
+                            # Following the reference notebook pattern EXACTLY:
+                            # 1. Run RF-DETR detection on frame 0 (NOT from ByteTrack)
+                            # 2. Assign IDs 1, 2, 3, ... manually to all detections
+                            # 3. Prompt SAM2 with these detections
+                            # 4. SAM2 handles ALL tracking from frame 0 onwards
                             #
-                            # SAM2 IDs are separate from ByteTrack IDs since SAM2
-                            # handles its own tracking. We'll map SAM2 masks back to
-                            # ByteTrack IDs using IoU matching.
+                            # This is different from ByteTrack - SAM2 is the tracker here.
 
-                            # Get first frame and its detections
+                            # Get first frame
                             first_frame = frames[0]
-                            first_detections = bytetrack_detections.get(0, sv.Detections.empty())
+
+                            # Run RF-DETR detection directly on frame 0 (like the notebook)
+                            print("Running RF-DETR detection on frame 0 for SAM2 prompting...")
+                            first_detections = self.player_detector.detect(first_frame)
+
+                            # Filter to only player classes (not referees)
+                            if len(first_detections) > 0:
+                                player_mask = np.isin(first_detections.class_id, PLAYER_CLASS_IDS)
+                                first_detections = first_detections[player_mask]
 
                             # Load first frame into SAM2
                             predictor.load_first_frame(first_frame)
 
-                            # Prompt SAM2 with all player detections from first frame
-                            # Assign IDs 1, 2, 3, ... as per reference notebook
-                            sam2_id_to_bbox = {}  # Map SAM2 ID to initial bbox for later matching
+                            # Assign IDs 1, 2, 3, ... manually (exactly like notebook)
+                            # Do NOT use ByteTrack IDs - SAM2 handles its own tracking
+                            sam2_id_to_bbox = {}
+                            tracking_info = {}  # Reset tracking_info for SAM2 IDs
+
                             if len(first_detections) > 0:
+                                # Assign tracker_id = [1, 2, 3, ...] like notebook does
+                                first_detections.tracker_id = np.arange(1, len(first_detections) + 1)
+
                                 for i in range(len(first_detections)):
-                                    sam2_id = i + 1  # IDs start at 1
+                                    sam2_id = int(first_detections.tracker_id[i])
                                     bbox = np.array([first_detections.xyxy[i]], dtype=np.float32)
                                     predictor.add_new_prompt(
                                         frame_idx=0,
@@ -1309,9 +1321,20 @@ class PlayerTracker:
                                         bbox=bbox,
                                     )
                                     sam2_id_to_bbox[sam2_id] = first_detections.xyxy[i]
-                                print(f"Prompted SAM2 with {len(first_detections)} players from frame 0")
+
+                                    # Populate tracking_info with SAM2 IDs
+                                    cls_id = int(first_detections.class_id[i]) if first_detections.class_id is not None else 0
+                                    cls_name = 'player' if cls_id in PLAYER_CLASS_IDS else 'referee'
+                                    conf = float(first_detections.confidence[i]) if first_detections.confidence is not None else 1.0
+                                    tracking_info[sam2_id] = {
+                                        'class': cls_name,
+                                        'confidence': conf,
+                                        'initial_box': first_detections.xyxy[i].tolist(),
+                                    }
+
+                                print(f"Prompted SAM2 with {len(first_detections)} players from frame 0 (IDs: 1-{len(first_detections)})")
                             else:
-                                print("Warning: No detections in frame 0 for SAM2 prompting")
+                                print("Warning: No player detections in frame 0 for SAM2 prompting")
 
                             # Propagate tracking across all frames
                             for frame_idx in tqdm(range(len(frames)), desc="SAM2 streaming tracking"):
