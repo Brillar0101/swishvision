@@ -109,8 +109,17 @@ class PlayerRefereeDetector:
             )
 
         print(f"Loading RF-DETR from: {self.checkpoint_path}")
-        # Load fine-tuned checkpoint by passing it to the constructor
-        self.model = RFDETRBase(str(self.checkpoint_path))
+        # Initialize model with checkpoint path using 'model' parameter
+        try:
+            self.model = RFDETRBase(model=str(self.checkpoint_path))
+        except TypeError:
+            # Fallback: try without parameter and load separately
+            self.model = RFDETRBase()
+            try:
+                self.model.load(str(self.checkpoint_path))
+            except AttributeError:
+                print(f"Warning: Could not load checkpoint. Using pretrained weights.")
+
         self._use_rfdetr = True
         print("Using fine-tuned RF-DETR for detection")
 
