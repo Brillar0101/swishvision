@@ -1145,10 +1145,20 @@ class PlayerTracker:
             # ============ STAGE 3: Team Classifier Training ============
             team_classifier = self._train_team_classifier(all_crops, team_names, checkpoint, resume)
 
-            # Swap team assignments if requested (K-means cluster IDs are arbitrary)
+            # HARDCODED team assignment (K-means cluster IDs are arbitrary)
+            # Based on visual inspection: cluster 0 = Pacers (yellow), cluster 1 = OKC (white)
+            team_classifier.team_names = {
+                0: "Indiana Pacers",
+                1: "Oklahoma City Thunder"
+            }
+
+            # Swap if requested (toggle the hardcoded assignment)
             if swap_teams:
                 print("  Swapping team assignments (cluster 0 <-> cluster 1)")
-                team_classifier.team_names = {0: team_names[1], 1: team_names[0]}
+                team_classifier.team_names = {
+                    0: "Oklahoma City Thunder",
+                    1: "Indiana Pacers"
+                }
 
             # Set team colors based on actual team names (BGR format for OpenCV)
             # Pacers = Yellow/Gold, OKC = Pink/Salmon (for visibility)
