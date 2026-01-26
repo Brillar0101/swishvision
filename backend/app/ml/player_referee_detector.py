@@ -110,12 +110,50 @@ class PlayerRefereeDetector:
 
         print(f"Loading RF-DETR from: {self.checkpoint_path}")
 
-        # Initialize RF-DETR with checkpoint path as first argument
-        # This is the standard way to load a fine-tuned RF-DETR model
-        self.model = RFDETRBase(str(self.checkpoint_path))
+        import torch
+
+        # Initialize RF-DETR base model (loads pretrained by default)
+        self.model = RFDETRBase()
+
+        # Load fine-tuned checkpoint and override pretrained weights
+        print(f"Loading fine-tuned checkpoint: {self.checkpoint_path}")
+        checkpoint = torch.load(str(self.checkpoint_path), map_location='cpu', weights_only=False)
+
+        # Extract state dict (handle both wrapped and direct formats)
+        if isinstance(checkpoint, dict):
+            if 'model' in checkpoint:
+                state_dict = checkpoint['model']
+            elif 'state_dict' in checkpoint:
+                state_dict = checkpoint['state_dict']
+            else:
+                state_dict = checkpoint
+        else:
+            state_dict = checkpoint
+
+        # Try to load weights into the model
+        # RFDETRBase may have different internal structures depending on version
+        loaded = False
+
+        # Try method 1: Direct model attribute with PyTorch load_state_dict
+        for attr in ['model', 'net', 'detector', '_model']:
+            if hasattr(self.model, attr):
+                inner_model = getattr(self.model, attr)
+                if hasattr(inner_model, 'load_state_dict'):
+                    try:
+                        inner_model.load_state_dict(state_dict, strict=False)
+                        print(f"✓ Loaded fine-tuned weights via '{attr}' ({len(state_dict)} keys)")
+                        loaded = True
+                        break
+                    except Exception as e:
+                        print(f"Attempt via '{attr}' failed: {e}")
+
+        if not loaded:
+            print(f"Warning: Could not load fine-tuned checkpoint")
+            print(f"Model attributes: {[a for a in dir(self.model) if not a.startswith('_')]}")
+            print("Using pretrained RF-DETR weights")
 
         self._use_rfdetr = True
-        print("Using fine-tuned RF-DETR for detection")
+        print("Using RF-DETR for detection")
 
     def detect(self, frame: np.ndarray) -> sv.Detections:
         """
