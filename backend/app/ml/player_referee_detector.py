@@ -109,16 +109,26 @@ class PlayerRefereeDetector:
             )
 
         print(f"Loading RF-DETR from: {self.checkpoint_path}")
-        # Initialize model with checkpoint path using 'model' parameter
-        try:
-            self.model = RFDETRBase(model=str(self.checkpoint_path))
-        except TypeError:
-            # Fallback: try without parameter and load separately
-            self.model = RFDETRBase()
-            try:
-                self.model.load(str(self.checkpoint_path))
-            except AttributeError:
-                print(f"Warning: Could not load checkpoint. Using pretrained weights.")
+
+        # RF-DETR uses 'model' parameter to specify checkpoint path
+        # Pass None to avoid downloading pretrained weights, we'll load ours
+        import torch
+
+        # Initialize model without pretrained weights
+        self.model = RFDETRBase(model=None)
+
+        # Manually load the fine-tuned checkpoint
+        print(f"Loading checkpoint weights from: {self.checkpoint_path}")
+        checkpoint = torch.load(str(self.checkpoint_path), map_location='cpu')
+
+        # The checkpoint might be wrapped in a dict with 'model' key or be the state dict directly
+        if isinstance(checkpoint, dict) and 'model' in checkpoint:
+            state_dict = checkpoint['model']
+        else:
+            state_dict = checkpoint
+
+        self.model.model.load_state_dict(state_dict)
+        print(f"✓ Loaded fine-tuned weights ({len(state_dict)} keys)")
 
         self._use_rfdetr = True
         print("Using fine-tuned RF-DETR for detection")
