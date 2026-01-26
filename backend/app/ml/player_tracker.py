@@ -1229,17 +1229,21 @@ class PlayerTracker:
                         video_segments = {}
 
                         with torch.inference_mode(), torch.amp.autocast(device_type=self.device.type, dtype=autocast_dtype, enabled=use_autocast):
+                            first_frame_loaded = False
+
                             for frame_idx in tqdm(range(len(frames)), desc="SAM2 streaming tracking"):
                                 frame = frames[frame_idx]
                                 detections = bytetrack_detections.get(frame_idx, sv.Detections.empty())
 
+                                # Load first frame BEFORE checking for detections
+                                # This ensures the predictor is always initialized
+                                if not first_frame_loaded:
+                                    predictor.load_first_frame(frame)
+                                    first_frame_loaded = True
+
                                 if len(detections) == 0:
                                     video_segments[frame_idx] = {}
                                     continue
-
-                                # Load first frame
-                                if frame_idx == 0:
-                                    predictor.load_first_frame(frame)
 
                                 # Determine which IDs to use for this frame
                                 has_stable_ids = detections.tracker_id is not None
