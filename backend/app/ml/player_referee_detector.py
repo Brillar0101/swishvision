@@ -93,26 +93,7 @@ class PlayerRefereeDetector:
         self.label_annotator = sv.LabelAnnotator(text_color=sv.Color.BLACK)
 
     def _load_model(self):
-        """Load the RF-DETR model or fall back to Roboflow API."""
-        if self.checkpoint_path.exists():
-            try:
-                from rfdetr import RFDETRBase
-                # Load model with custom pretrain_weights path
-                self.model = RFDETRBase(pretrain_weights=str(self.checkpoint_path))
-                self._use_rfdetr = True
-                print(f"Loaded RF-DETR model from: {self.checkpoint_path}")
-            except ImportError:
-                print("Warning: rfdetr package not installed. Falling back to Roboflow API.")
-                self._load_roboflow_model()
-            except Exception as e:
-                print(f"Warning: Failed to load RF-DETR model: {e}. Falling back to Roboflow API.")
-                self._load_roboflow_model()
-        else:
-            print(f"RF-DETR checkpoint not found at: {self.checkpoint_path}")
-            self._load_roboflow_model()
-
-    def _load_roboflow_model(self):
-        """Fall back to Roboflow API model."""
+        """Load Roboflow API model (as per reference notebook implementation)."""
         from dotenv import load_dotenv
         from inference import get_model
 
@@ -120,7 +101,7 @@ class PlayerRefereeDetector:
 
         api_key = os.getenv("ROBOFLOW_API_KEY")
         if not api_key:
-            raise ValueError("ROBOFLOW_API_KEY not set and RF-DETR model not available")
+            raise ValueError("ROBOFLOW_API_KEY environment variable is required")
 
         self.model = get_model(
             model_id="basketball-player-detection-3-ycjdo/4",

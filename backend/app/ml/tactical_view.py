@@ -342,37 +342,25 @@ class TacticalView:
 
 def draw_court(config=None, width: int = COURT_DEFAULT_WIDTH, height: int = COURT_DEFAULT_HEIGHT) -> np.ndarray:
     """
-    Draw an NBA basketball court.
-
-    Uses the sports library if available, otherwise draws a simple court.
+    Draw an NBA basketball court using the sports library.
 
     Args:
         config: CourtConfiguration (optional, uses NBA default if not provided)
-        width: Image width in pixels (used for fallback)
-        height: Image height in pixels (used for fallback)
+        width: Image width in pixels (unused, kept for API compatibility)
+        height: Image height in pixels (unused, kept for API compatibility)
 
     Returns:
         Court image (BGR)
     """
-    if SPORTS_LIBRARY_AVAILABLE:
-        if config is None:
-            config = CourtConfiguration(league=League.NBA, measurement_unit=MeasurementUnit.FEET)
-        return _sports_draw_court(config=config)
+    if not SPORTS_LIBRARY_AVAILABLE:
+        raise RuntimeError(
+            "Sports library is required. Install with:\n"
+            "  pip install git+https://github.com/roboflow/sports.git@feat/basketball"
+        )
 
-    # Fallback: draw simple court
-    court = np.ones((height, width, 3), dtype=np.uint8)
-    court[:, :] = COURT_FALLBACK_BG_COLOR
-
-    # Court outline
-    cv2.rectangle(court, (10, 10), (width - 10, height - 10), COURT_OUTLINE_COLOR, 2)
-
-    # Center line
-    cv2.line(court, (width // 2, 10), (width // 2, height - 10), COURT_OUTLINE_COLOR, 2)
-
-    # Center circle
-    cv2.circle(court, (width // 2, height // 2), COURT_CENTER_CIRCLE_RADIUS, COURT_OUTLINE_COLOR, 2)
-
-    return court
+    if config is None:
+        config = CourtConfiguration(league=League.NBA, measurement_unit=MeasurementUnit.FEET)
+    return _sports_draw_court(config=config)
 
 
 def create_combined_view(

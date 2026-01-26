@@ -1,0 +1,13 @@
+{
+  "completed_stages": [
+    "frames_extracted",
+    "crops_collected",
+    "team_classifier_trained"
+  ],
+  "metadata": {
+    "fps": 29.97002997002997,
+    "width": 1920,
+    "height": 1080,
+    "frame_count": 299
+  }
+}
