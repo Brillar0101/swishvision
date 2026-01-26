@@ -1060,6 +1060,7 @@ class PlayerTracker:
         num_sample_frames: int = 3,
         max_seconds: float = None,
         team_names: Tuple[str, str] = ("Indiana Pacers", "Oklahoma City Thunder"),
+        swap_teams: bool = False,  # Swap team 0/1 assignment after clustering
         jersey_ocr_interval: int = 5,
         smooth_tactical: bool = True,
         resume: bool = True,
@@ -1134,6 +1135,11 @@ class PlayerTracker:
 
             # ============ STAGE 3: Team Classifier Training ============
             team_classifier = self._train_team_classifier(all_crops, team_names, checkpoint, resume)
+
+            # Swap team assignments if requested (K-means cluster IDs are arbitrary)
+            if swap_teams:
+                print("  Swapping team assignments (cluster 0 <-> cluster 1)")
+                team_classifier.team_names = {0: team_names[1], 1: team_names[0]}
 
             # ============ STAGE 4: Court Detection ============
             court_mask = self._detect_court(frames[0], height, width)

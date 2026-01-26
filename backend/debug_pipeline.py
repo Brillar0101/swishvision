@@ -19,6 +19,7 @@ result = tracker.process_video_with_tracking(
     video_path='../test_videos/test_game.mp4',
     output_dir='debug_output',
     team_names=('Oklahoma City Thunder', 'Indiana Pacers'),  # white=thunder, yellow=pacers
+    swap_teams=True,  # Swap if teams are assigned incorrectly after K-means clustering
     use_bytetrack=True,
     use_sam2_segmentation=True,
     use_streaming_sam2=True,  # Use camera predictor (now available)
