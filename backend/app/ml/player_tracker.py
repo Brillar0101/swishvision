@@ -26,7 +26,63 @@ except ImportError:
 
 from app.ml.player_referee_detector import PlayerRefereeDetector
 from app.ml.court_detector import CourtDetector
-from app.ml.team_classifier import TeamClassifier, get_player_crops
+from app.ml.team_classifier import get_player_crops
+
+# Use sports library TeamClassifier (SigLIP + UMAP + K-means) as per reference notebook
+try:
+    from sports import TeamClassifier as SportsTeamClassifier
+    SPORTS_TEAM_CLASSIFIER = True
+except ImportError:
+    SportsTeamClassifier = None
+    SPORTS_TEAM_CLASSIFIER = False
+    print("Warning: Using fallback TeamClassifier (no UMAP). Install sports library for better results.")
+
+from app.ml.team_classifier import TeamClassifier as FallbackTeamClassifier
+
+
+class TeamClassifierWrapper:
+    """Wrapper to add our custom methods to sports library TeamClassifier."""
+
+    # Default team colors (BGR for OpenCV)
+    DEFAULT_COLORS = {
+        0: (0, 255, 0),    # Green for Team A
+        1: (0, 0, 255),    # Red for Team B
+        -1: (0, 255, 255), # Yellow for referees
+    }
+
+    def __init__(self, device: str = "cpu"):
+        if SPORTS_TEAM_CLASSIFIER:
+            self._classifier = SportsTeamClassifier(device=device)
+        else:
+            self._classifier = FallbackTeamClassifier(n_teams=2, device=device)
+
+        self.team_names = {0: "Team A", 1: "Team B"}
+        self.team_colors = self.DEFAULT_COLORS.copy()
+        self.is_fitted = False
+
+    def fit(self, crops):
+        self._classifier.fit(crops)
+        self.is_fitted = True
+
+    def predict(self, crops):
+        return self._classifier.predict(crops)
+
+    def predict_single(self, crop):
+        """Predict team for a single crop."""
+        result = self._classifier.predict([crop])
+        return result[0] if result else -1
+
+    def get_team_color(self, team_id: int):
+        """Get BGR color for team."""
+        return self.team_colors.get(team_id, (128, 128, 128))
+
+    def get_team_name(self, team_id: int):
+        """Get team name."""
+        return self.team_names.get(team_id, f"Team {team_id}")
+
+
+# Use wrapper as TeamClassifier
+TeamClassifier = TeamClassifierWrapper
 from app.ml.tactical_view import TacticalView, create_combined_view
 from app.ml.team_rosters import TEAM_ROSTERS, TEAM_COLORS, get_player_name
 from app.ml.path_smoothing import smooth_tactical_positions
@@ -409,33 +465,25 @@ class PlayerTracker:
         team_names: Tuple[str, str],
         checkpoint: PipelineCheckpoint,
         resume: bool
-    ) -> TeamClassifier:
+    ):
         """
-        Train team classifier using K-means on player crops.
+        Train team classifier using SigLIP + UMAP + K-means.
+
+        Uses sports library TeamClassifier if available (has UMAP for better clustering).
 
         Returns:
-            Trained TeamClassifier instance
+            Trained TeamClassifier instance (wrapper with consistent interface)
         """
         tc_device = "cuda" if self.device.type == "cuda" else "cpu"
-        team_classifier = TeamClassifier(n_teams=2, device=tc_device)
+        team_classifier = TeamClassifier(device=tc_device)
 
-        if resume and checkpoint.is_stage_complete('team_classifier_trained'):
-            print("Training team classifier... [CACHED]")
-            tc_data = checkpoint.load_data('team_classifier')
-            if tc_data:
-                team_classifier._kmeans = tc_data.get('_kmeans')
-                team_classifier.is_fitted = tc_data.get('is_fitted', False)
-                print(f"  Loaded team classifier from cache (fitted={team_classifier.is_fitted})")
-        else:
-            print("Training team classifier...")
-            if len(all_crops) >= 2:
-                team_classifier.fit(all_crops)
-            checkpoint.save_data('team_classifier', {
-                '_kmeans': team_classifier._kmeans,
-                'is_fitted': team_classifier.is_fitted,
-            })
-            checkpoint.mark_stage_complete('team_classifier_trained')
+        # Train the classifier
+        print("Training team classifier...")
+        if len(all_crops) >= 2:
+            team_classifier.fit(all_crops)
+        checkpoint.mark_stage_complete('team_classifier_trained')
 
+        # Set team names
         team_classifier.team_names = {0: team_names[0], 1: team_names[1]}
         return team_classifier
 
