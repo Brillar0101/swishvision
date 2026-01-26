@@ -28,6 +28,7 @@ Thumbs.db
 test_videos/
 outputs/
 portfolio_outputs*/
+debug_output/
 *.mp4
 *.avi
 *.mov
@@ -45,6 +46,8 @@ Context.txt
 *.onnx
 models/weights/
 checkpoints/
+.checkpoint.pkl
+.frames_cache/
 
 # Temporary files
 *.tmp
