@@ -68,9 +68,18 @@ class TeamClassifierWrapper:
         return self._classifier.predict(crops)
 
     def predict_single(self, crop):
-        """Predict team for a single crop."""
-        result = self._classifier.predict([crop])
-        return result[0] if result else -1
+        """Predict team for a single crop. Always returns 0 or 1 (never -1 for players)."""
+        try:
+            result = self._classifier.predict([crop])
+            if result is not None and len(result) > 0:
+                team_id = int(result[0])
+                # Ensure valid team ID (0 or 1 only)
+                if team_id in [0, 1]:
+                    return team_id
+        except Exception:
+            pass
+        # Default to team 0 if prediction fails
+        return 0
 
     def get_team_color(self, team_id: int):
         """Get BGR color for team."""
@@ -1140,6 +1149,17 @@ class PlayerTracker:
             if swap_teams:
                 print("  Swapping team assignments (cluster 0 <-> cluster 1)")
                 team_classifier.team_names = {0: team_names[1], 1: team_names[0]}
+
+            # Set team colors based on actual team names (BGR format for OpenCV)
+            # Pacers = Yellow/Gold, OKC = Pink/Salmon (for visibility)
+            team_color_map = {
+                "Indiana Pacers": (48, 187, 253),      # Yellow/Gold BGR
+                "Oklahoma City Thunder": (180, 105, 255),  # Pink/Salmon BGR
+            }
+            for team_id, team_name in team_classifier.team_names.items():
+                if team_name in team_color_map:
+                    team_classifier.team_colors[team_id] = team_color_map[team_name]
+            print(f"  Team 0: {team_classifier.team_names.get(0)} | Team 1: {team_classifier.team_names.get(1)}")
 
             # ============ STAGE 4: Court Detection ============
             court_mask = self._detect_court(frames[0], height, width)
