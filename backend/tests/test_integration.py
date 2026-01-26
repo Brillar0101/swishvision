@@ -144,8 +144,19 @@ class TestTeamClassifierIntegration:
     def test_classifier_training_and_prediction(self):
         """Test that classifier can be trained and make predictions."""
         # Create synthetic player crops (green and red teams)
-        green_crops = [np.ones((64, 64, 3), dtype=np.uint8) * [0, 255, 0] for _ in range(5)]
-        red_crops = [np.ones((64, 64, 3), dtype=np.uint8) * [0, 0, 255] for _ in range(5)]
+        # Note: create arrays properly to avoid dtype issues
+        green_crops = []
+        for _ in range(5):
+            crop = np.zeros((64, 64, 3), dtype=np.uint8)
+            crop[:, :, 1] = 255  # Green channel
+            green_crops.append(crop)
+
+        red_crops = []
+        for _ in range(5):
+            crop = np.zeros((64, 64, 3), dtype=np.uint8)
+            crop[:, :, 2] = 255  # Red channel (in BGR)
+            red_crops.append(crop)
+
         all_crops = green_crops + red_crops
 
         classifier = TeamClassifier(n_teams=2, device='cpu')
@@ -154,8 +165,11 @@ class TestTeamClassifierIntegration:
         assert classifier.is_fitted
 
         # Test prediction
-        green_test = np.ones((64, 64, 3), dtype=np.uint8) * [0, 255, 0]
-        red_test = np.ones((64, 64, 3), dtype=np.uint8) * [0, 0, 255]
+        green_test = np.zeros((64, 64, 3), dtype=np.uint8)
+        green_test[:, :, 1] = 255
+
+        red_test = np.zeros((64, 64, 3), dtype=np.uint8)
+        red_test[:, :, 2] = 255
 
         green_pred = classifier.predict_single(green_test)
         red_pred = classifier.predict_single(red_test)
