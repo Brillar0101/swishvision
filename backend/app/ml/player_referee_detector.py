@@ -119,7 +119,8 @@ class PlayerRefereeDetector:
 
         # Manually load the fine-tuned checkpoint
         print(f"Loading checkpoint weights from: {self.checkpoint_path}")
-        checkpoint = torch.load(str(self.checkpoint_path), map_location='cpu')
+        # Use weights_only=False since we trust our own trained checkpoint
+        checkpoint = torch.load(str(self.checkpoint_path), map_location='cpu', weights_only=False)
 
         # The checkpoint might be wrapped in a dict with 'model' key or be the state dict directly
         if isinstance(checkpoint, dict) and 'model' in checkpoint:
