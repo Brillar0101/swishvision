@@ -57,37 +57,21 @@ class TeamClassifier:
         if self._model is not None:
             return
 
-        try:
-            from transformers import AutoProcessor, SiglipVisionModel
-            import torch
+        from transformers import AutoProcessor, SiglipVisionModel
+        import torch
 
-            self._processor = AutoProcessor.from_pretrained(SIGLIP_MODEL_NAME)
-            self._model = SiglipVisionModel.from_pretrained(SIGLIP_MODEL_NAME)
+        self._processor = AutoProcessor.from_pretrained(SIGLIP_MODEL_NAME)
+        self._model = SiglipVisionModel.from_pretrained(SIGLIP_MODEL_NAME)
 
-            if self.device == "cuda" and torch.cuda.is_available():
-                self._model = self._model.to("cuda")
+        if self.device == "cuda" and torch.cuda.is_available():
+            self._model = self._model.to("cuda")
 
-            self._model.eval()
-            print("  SigLIP model loaded")
-        except Exception as e:
-            print(f"  Failed to load SigLIP model: {e}")
-            print("  Falling back to color-based classification")
-            self._model = "fallback"
+        self._model.eval()
+        print("  SigLIP model loaded")
 
     def _get_embeddings(self, crops: List[np.ndarray]) -> np.ndarray:
         """Get SigLIP embeddings for crops."""
         import torch
-
-        if self._model == "fallback" or self._model is None:
-            # Fallback: use average color as embedding
-            embeddings = []
-            for crop in crops:
-                if crop.size == 0:
-                    embeddings.append(np.zeros(3))
-                else:
-                    avg_color = np.mean(crop, axis=(0, 1))
-                    embeddings.append(avg_color)
-            return np.array(embeddings)
 
         # Convert BGR to RGB
         rgb_crops = [cv2.cvtColor(c, cv2.COLOR_BGR2RGB) for c in crops if c.size > 0]
@@ -250,8 +234,7 @@ def classify_frame_teams(
     crops = get_player_crops(frame, detections, scale_factor)
 
     if len(crops) != len(detections):
-        # Fallback if some crops failed
-        return np.zeros(len(detections), dtype=int)
+        raise RuntimeError(f"Crop extraction failed: expected {len(detections)} crops but got {len(crops)}")
 
     teams = classifier.predict(crops)
     return np.array(teams)

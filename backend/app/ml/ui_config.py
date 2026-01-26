@@ -414,11 +414,10 @@ def create_player_label(
 # ============================================================================
 
 class VideoConfig:
-    """High-quality video output settings."""
+    """Video output settings using mp4v codec (as per reference notebook)."""
 
-    # H.264 codec for better quality
-    FOURCC = cv2.VideoWriter_fourcc(*'avc1')  # H.264
-    FOURCC_FALLBACK = cv2.VideoWriter_fourcc(*'mp4v')  # Fallback
+    # mp4v codec
+    FOURCC = cv2.VideoWriter_fourcc(*'mp4v')
 
     # Quality settings
     DEFAULT_FPS = 30.0
@@ -430,30 +429,24 @@ class VideoConfig:
         fps: float,
         width: int,
         height: int,
-        use_h264: bool = True
+        use_h264: bool = False  # Deprecated parameter, ignored
     ) -> cv2.VideoWriter:
         """
-        Create a high-quality video writer.
+        Create a video writer using mp4v codec.
 
         Args:
             output_path: Output video path
             fps: Frames per second
             width: Video width
             height: Video height
-            use_h264: Use H.264 codec (recommended)
+            use_h264: Ignored (kept for API compatibility)
 
         Returns:
             VideoWriter object
         """
-        fourcc = VideoConfig.FOURCC if use_h264 else VideoConfig.FOURCC_FALLBACK
+        writer = cv2.VideoWriter(output_path, VideoConfig.FOURCC, fps, (width, height))
 
-        writer = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
-
-        # If H.264 fails, fallback to mp4v
-        if use_h264 and not writer.isOpened():
-            print(f"Warning: H.264 codec not available, using mp4v fallback")
-            writer = cv2.VideoWriter(
-                output_path, VideoConfig.FOURCC_FALLBACK, fps, (width, height)
-            )
+        if not writer.isOpened():
+            raise RuntimeError(f"Failed to create video writer for {output_path}")
 
         return writer
