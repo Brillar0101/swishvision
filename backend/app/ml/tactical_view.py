@@ -36,8 +36,8 @@ except ImportError:
     print("Warning: sports library not available. Install with:")
     print("  pip install git+https://github.com/roboflow/sports.git@feat/basketball")
 
-# Court keypoint model
-COURT_KEYPOINT_MODEL_ID = "basketball-court-detection-2/19"
+# Court keypoint model (same as reference notebook)
+COURT_KEYPOINT_MODEL_ID = "basketball-court-detection-2/14"
 KEYPOINT_CONFIDENCE = 0.3
 ANCHOR_CONFIDENCE = 0.5
 

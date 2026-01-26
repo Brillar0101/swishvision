@@ -9,7 +9,7 @@ load_dotenv()
 class CourtDetector:
     def __init__(self):
         self.model = get_model(
-            model_id="basketball-court-detection-2/19",
+            model_id="basketball-court-detection-2/14",  # Same as reference notebook
             api_key=os.getenv("ROBOFLOW_API_KEY")
         )
         self.confidence = 0.3
