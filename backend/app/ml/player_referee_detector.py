@@ -1,8 +1,8 @@
 """
 Player and Referee Detection using fine-tuned RF-DETR model.
 
-This module detects players and referees using a locally trained RF-DETR model,
-eliminating the need for Roboflow API calls during inference.
+This module detects players and referees using Roboflow's hosted fine-tuned RF-DETR model
+(basketball-player-detection-3-ycjdo/4) via the inference API.
 
 Player classes:
 - 3: player
@@ -19,10 +19,10 @@ import os
 import numpy as np
 import supervision as sv
 from pathlib import Path
+from inference import get_model
 
-# Model paths
-MODEL_DIR = Path(__file__).parent.parent.parent / "models"
-RFDETR_CHECKPOINT = MODEL_DIR / "rfdetr_basketball.pth"
+# Roboflow model ID (fine-tuned RF-DETR on basketball-player-detection-3-ycjdo dataset)
+PLAYER_DETECTION_MODEL_ID = "basketball-player-detection-3-ycjdo/4"
 
 # Detection settings
 DETECTION_CONFIDENCE = 0.4
@@ -56,27 +56,21 @@ class PlayerRefereeDetector:
 
     def __init__(self, confidence: float = DETECTION_CONFIDENCE,
                  iou_threshold: float = DETECTION_IOU_THRESHOLD,
-                 checkpoint_path: str = None):
+                 model_id: str = PLAYER_DETECTION_MODEL_ID):
         """
         Initialize the detector.
 
         Args:
             confidence: Detection confidence threshold
             iou_threshold: NMS IoU threshold
-            checkpoint_path: Path to RF-DETR checkpoint (uses default if None)
+            model_id: Roboflow model ID (default: basketball-player-detection-3-ycjdo/4)
         """
         self.confidence = confidence
         self.iou_threshold = iou_threshold
+        self.model_id = model_id
         self.model = None
-        self._use_rfdetr = False
 
-        # Determine which checkpoint to use
-        if checkpoint_path:
-            self.checkpoint_path = Path(checkpoint_path)
-        else:
-            self.checkpoint_path = RFDETR_CHECKPOINT
-
-        # Try to load RF-DETR model
+        # Load fine-tuned RF-DETR model from Roboflow
         self._load_model()
 
         # Tracker for persistent IDs
@@ -93,86 +87,25 @@ class PlayerRefereeDetector:
         self.label_annotator = sv.LabelAnnotator(text_color=sv.Color.BLACK)
 
     def _load_model(self):
-        """Load fine-tuned RF-DETR model."""
-        try:
-            from rfdetr import RFDETRBase
-        except ImportError:
-            raise ImportError(
-                "rfdetr package not installed. Install with:\n"
-                "  pip install rfdetr"
-            )
-
-        if not self.checkpoint_path.exists():
-            raise FileNotFoundError(
-                f"RF-DETR checkpoint not found: {self.checkpoint_path}\n"
-                f"Fine-tune the model first using: python scripts/train_rfdetr.py"
-            )
-
-        print(f"Loading RF-DETR from: {self.checkpoint_path}")
-
-        import torch
-
-        # Initialize RF-DETR base model (loads pretrained by default)
-        self.model = RFDETRBase()
-
-        # Load fine-tuned checkpoint and override pretrained weights
-        print(f"Loading fine-tuned checkpoint: {self.checkpoint_path}")
-        checkpoint = torch.load(str(self.checkpoint_path), map_location='cpu', weights_only=False)
-
-        # Extract state dict (handle both wrapped and direct formats)
-        if isinstance(checkpoint, dict):
-            if 'model' in checkpoint:
-                state_dict = checkpoint['model']
-            elif 'state_dict' in checkpoint:
-                state_dict = checkpoint['state_dict']
-            else:
-                state_dict = checkpoint
-        else:
-            state_dict = checkpoint
-
-        # Try to load weights into the model
-        # RFDETRBase may have different internal structures depending on version
-        loaded = False
-
-        # Try method 1: Direct model attribute with PyTorch load_state_dict
-        for attr in ['model', 'net', 'detector', '_model']:
-            if hasattr(self.model, attr):
-                inner_model = getattr(self.model, attr)
-                if hasattr(inner_model, 'load_state_dict'):
-                    try:
-                        inner_model.load_state_dict(state_dict, strict=False)
-                        print(f"✓ Loaded fine-tuned weights via '{attr}' ({len(state_dict)} keys)")
-                        loaded = True
-                        break
-                    except Exception as e:
-                        print(f"Attempt via '{attr}' failed: {e}")
-
-        if not loaded:
-            print(f"Warning: Could not load fine-tuned checkpoint")
-            print(f"Model attributes: {[a for a in dir(self.model) if not a.startswith('_')]}")
-            print("Using pretrained RF-DETR weights")
-
-        self._use_rfdetr = True
-        print("Using RF-DETR for detection")
+        """Load fine-tuned RF-DETR model from Roboflow."""
+        print(f"Loading fine-tuned RF-DETR model: {self.model_id}")
+        self.model = get_model(model_id=self.model_id)
+        print("✓ Model loaded successfully from Roboflow")
 
     def detect(self, frame: np.ndarray) -> sv.Detections:
         """
-        Detect players and referees in a frame.
+        Detect players and referees in a frame using Roboflow-hosted fine-tuned RF-DETR.
 
         Returns:
             sv.Detections with only player and referee detections
         """
-        if self._use_rfdetr:
-            # RF-DETR inference - returns sv.Detections directly
-            detections = self.model.predict(frame, threshold=self.confidence)
-        else:
-            # Roboflow API inference
-            result = self.model.infer(
-                frame,
-                confidence=self.confidence,
-                iou_threshold=self.iou_threshold
-            )[0]
-            detections = sv.Detections.from_inference(result)
+        # Roboflow API inference (fine-tuned RF-DETR model)
+        result = self.model.infer(
+            frame,
+            confidence=self.confidence,
+            iou_threshold=self.iou_threshold
+        )[0]
+        detections = sv.Detections.from_inference(result)
 
         # Filter to only players and referees
         if len(detections) > 0:
@@ -285,13 +218,11 @@ def process_video(source_video_path: str, output_dir: str = None) -> dict:
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description="Player and Referee Detection")
+    parser = argparse.ArgumentParser(description="Player and Referee Detection using fine-tuned RF-DETR")
     parser.add_argument("video_path", nargs="?", default="../test_videos/test_game.mp4",
                         help="Path to input video")
     parser.add_argument("output_dir", nargs="?", default="output/player_referee_detection",
                         help="Output directory")
-    parser.add_argument("--checkpoint", type=str, default=None,
-                        help="Path to RF-DETR checkpoint")
 
     args = parser.parse_args()
 
