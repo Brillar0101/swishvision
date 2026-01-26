@@ -18,8 +18,8 @@ tracker = PlayerTracker(device="cuda")
 result = tracker.process_video_with_tracking(
     video_path='../test_videos/test_game.mp4',
     output_dir='debug_output',
-    team_names=('Oklahoma City Thunder', 'Indiana Pacers'),  # white=thunder, yellow=pacers
-    swap_teams=False,  # Teams now correctly assigned without swap
+    team_names=('Indiana Pacers', 'Oklahoma City Thunder'),  # yellow=pacers, white=thunder
+    swap_teams=False,  # Try with reversed tuple order
     use_bytetrack=True,
     use_sam2_segmentation=True,
     use_streaming_sam2=True,  # Use camera predictor (now available)
