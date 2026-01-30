@@ -1063,7 +1063,7 @@ class PlayerTracker:
         self,
         video_path: str,
         output_dir: str,
-        keyframe_interval: int = 30,
+        keyframe_interval: int = 15,
         iou_threshold: float = 0.3,
         max_total_objects: int = 30,
         num_sample_frames: int = 3,
@@ -1089,7 +1089,7 @@ class PlayerTracker:
         Args:
             video_path: Path to input video file
             output_dir: Directory for output files
-            keyframe_interval: Frames between player detection keyframes (ignored if use_bytetrack=True)
+            keyframe_interval: Frames between player detection keyframes (default 15). Used to detect new players mid-stream.
             iou_threshold: IoU threshold for matching detections
             max_total_objects: Maximum tracked objects to keep (filters to most frequent).
                              Basketball: 10 players + 2-3 refs + buffer for ID switching.
@@ -1338,6 +1338,9 @@ class PlayerTracker:
                             sam2_id_to_bbox = {}
                             tracking_info = {}  # Reset tracking_info for SAM2 IDs
 
+                            # Track next available SAM2 ID for adding new players later
+                            next_sam2_id = 1
+
                             if len(first_detections) > 0:
                                 # Assign tracker_id = [1, 2, 3, ...] like notebook does
                                 first_detections.tracker_id = np.arange(1, len(first_detections) + 1)
@@ -1362,18 +1365,77 @@ class PlayerTracker:
                                         'initial_box': first_detections.xyxy[i].tolist(),
                                     }
 
+                                next_sam2_id = len(first_detections) + 1
                                 print(f"Prompted SAM2 with {len(first_detections)} players from frame 0 (IDs: 1-{len(first_detections)})")
                             else:
                                 print("Warning: No player detections in frame 0 for SAM2 prompting")
+
+                            # Create keyframe set for detecting new players mid-stream
+                            keyframe_set = set(keyframe_indices)
 
                             # Propagate tracking across all frames
                             for frame_idx in tqdm(range(len(frames)), desc="SAM2 streaming tracking"):
                                 frame = frames[frame_idx]
 
-                                if len(sam2_id_to_bbox) == 0:
-                                    video_segments[frame_idx] = {}
-                                    continue
+                                # At keyframes (except frame 0), detect and add new players BEFORE tracking
+                                # This ensures new players get segmented starting from this frame
+                                if frame_idx > 0 and frame_idx in keyframe_set and next_sam2_id < max_total_objects:
+                                    new_detections = self.player_detector.detect(frame)
 
+                                    if len(new_detections) > 0:
+                                        # Filter to only player classes
+                                        player_mask = np.isin(new_detections.class_id, PLAYER_CLASS_IDS)
+                                        new_detections = new_detections[player_mask]
+
+                                        if len(new_detections) > 0:
+                                            # Convert to dict format for matching
+                                            det_list = []
+                                            for i in range(len(new_detections)):
+                                                box = new_detections.xyxy[i].tolist()
+                                                # Filter by court mask if available
+                                                if court_mask is not None:
+                                                    cy = min(max(int((box[1] + box[3]) / 2), 0), height - 1)
+                                                    cx = min(max(int((box[0] + box[2]) / 2), 0), width - 1)
+                                                    if court_mask[cy, cx] == 0:
+                                                        continue
+                                                conf = float(new_detections.confidence[i]) if new_detections.confidence is not None else 1.0
+                                                cls_id = int(new_detections.class_id[i]) if new_detections.class_id is not None else 0
+                                                cls_name = 'player' if cls_id in PLAYER_CLASS_IDS else 'referee'
+                                                det_list.append({'box': box, 'confidence': conf, 'class': cls_name})
+
+                                            # Match against currently tracked boxes
+                                            _matched, unmatched = self._match_detections_to_existing(det_list, current_boxes, iou_threshold)
+
+                                            # Add unmatched detections as new tracking targets
+                                            new_added = 0
+                                            for det in unmatched:
+                                                if next_sam2_id >= max_total_objects:
+                                                    break
+
+                                                box = det['box']
+                                                bbox = np.array([[box[0], box[1], box[2], box[3]]], dtype=np.float32)
+
+                                                # Add new target to SAM2 BEFORE track() so it gets segmented this frame
+                                                predictor.add_new_prompt_during_track(
+                                                    bbox=bbox,
+                                                    obj_id=next_sam2_id,
+                                                )
+
+                                                sam2_id_to_bbox[next_sam2_id] = np.array(box)
+                                                tracking_info[next_sam2_id] = {
+                                                    'class': det['class'],
+                                                    'confidence': det['confidence'],
+                                                    'initial_box': box,
+                                                }
+                                                current_boxes[next_sam2_id] = box
+
+                                                next_sam2_id += 1
+                                                new_added += 1
+
+                                            if new_added > 0:
+                                                print(f"Frame {frame_idx}: Added {new_added} new players (total: {len(sam2_id_to_bbox)})")
+
+                                # Now track - this will include any newly added players
                                 tracker_ids, mask_logits = predictor.track(frame)
 
                                 if len(tracker_ids) > 0:
