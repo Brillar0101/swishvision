@@ -1416,21 +1416,29 @@ class PlayerTracker:
                                                 bbox = np.array([[box[0], box[1], box[2], box[3]]], dtype=np.float32)
 
                                                 # Add new target to SAM2 BEFORE track() so it gets segmented this frame
-                                                predictor.add_new_prompt_during_track(
-                                                    bbox=bbox,
-                                                    obj_id=next_sam2_id,
-                                                )
+                                                try:
+                                                    predictor.add_new_prompt_during_track(
+                                                        bbox=bbox,
+                                                        obj_id=next_sam2_id,
+                                                    )
 
-                                                sam2_id_to_bbox[next_sam2_id] = np.array(box)
-                                                tracking_info[next_sam2_id] = {
-                                                    'class': det['class'],
-                                                    'confidence': det['confidence'],
-                                                    'initial_box': box,
-                                                }
-                                                current_boxes[next_sam2_id] = box
+                                                    sam2_id_to_bbox[next_sam2_id] = np.array(box)
+                                                    tracking_info[next_sam2_id] = {
+                                                        'class': det['class'],
+                                                        'confidence': det['confidence'],
+                                                        'initial_box': box,
+                                                    }
+                                                    current_boxes[next_sam2_id] = box
 
-                                                next_sam2_id += 1
-                                                new_added += 1
+                                                    next_sam2_id += 1
+                                                    new_added += 1
+                                                except (NotImplementedError, TypeError) as e:
+                                                    # SAM2 version doesn't support adding prompts mid-stream
+                                                    # (raises NotImplemented which causes TypeError, or NotImplementedError)
+                                                    # Fall back to tracking only players detected in frame 0
+                                                    if frame_idx == keyframe_indices[1] if len(keyframe_indices) > 1 else 15:  # Only warn once
+                                                        print(f"Warning: SAM2 add_new_prompt_during_track not supported ({type(e).__name__}). Only tracking players from frame 0.")
+                                                    break
 
                                             if new_added > 0:
                                                 print(f"Frame {frame_idx}: Added {new_added} new players (total: {len(sam2_id_to_bbox)})")
