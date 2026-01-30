@@ -1,0 +1,228 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Import fonts */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+/* Base styles */
+@layer base {
+  :root {
+    --color-court: #E85D04;
+    --color-blacktop: #0D0D0D;
+    --color-sideline: #F8F7F4;
+    --color-baseline: #6B7280;
+  }
+
+  html {
+    font-family: 'Inter', system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    @apply bg-sideline text-blacktop;
+  }
+
+  /* Custom scrollbar */
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  ::-webkit-scrollbar-track {
+    @apply bg-baseline-100;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    @apply bg-baseline-300;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-baseline-400;
+  }
+}
+
+/* Component styles */
+@layer components {
+  /* Primary button */
+  .btn-primary {
+    @apply inline-flex items-center justify-center;
+    @apply px-6 py-3.5;
+    @apply bg-court rounded-lg;
+    @apply text-white font-semibold text-[15px] tracking-wide;
+    @apply transition-all duration-100 ease-out;
+    @apply hover:bg-court-600;
+    @apply active:bg-court-700;
+    @apply disabled:opacity-50 disabled:cursor-not-allowed;
+    @apply focus:outline-none focus:ring-2 focus:ring-court focus:ring-offset-2;
+  }
+
+  /* Secondary button */
+  .btn-secondary {
+    @apply inline-flex items-center justify-center;
+    @apply px-6 py-3.5;
+    @apply bg-white rounded-lg;
+    @apply text-blacktop font-semibold text-[15px] tracking-wide;
+    @apply border border-baseline-300;
+    @apply transition-all duration-100 ease-out;
+    @apply hover:bg-baseline-50 hover:border-baseline-400;
+    @apply active:bg-baseline-100;
+    @apply disabled:opacity-50 disabled:cursor-not-allowed;
+    @apply focus:outline-none focus:ring-2 focus:ring-court focus:ring-offset-2;
+  }
+
+  /* Ghost button */
+  .btn-ghost {
+    @apply inline-flex items-center justify-center;
+    @apply px-4 py-2 rounded-md;
+    @apply text-baseline-600 font-medium text-sm;
+    @apply transition-all duration-100 ease-out;
+    @apply hover:bg-baseline-100 hover:text-blacktop;
+    @apply focus:outline-none focus:ring-2 focus:ring-court focus:ring-offset-2;
+  }
+
+  /* Text link */
+  .link {
+    @apply text-court font-medium;
+    @apply transition-colors duration-150;
+    @apply hover:text-court-600 hover:underline;
+  }
+
+  /* Input field */
+  .input {
+    @apply w-full;
+    @apply px-4 py-3 rounded-lg;
+    @apply bg-white;
+    @apply text-blacktop text-base;
+    @apply placeholder:text-baseline-400;
+    @apply border border-baseline-300;
+    @apply transition-all duration-100 ease-out;
+    @apply hover:border-baseline-400;
+    @apply focus:border-blacktop focus:outline-none;
+    @apply disabled:bg-baseline-50 disabled:text-baseline-400 disabled:cursor-not-allowed;
+  }
+
+  /* Card */
+  .card {
+    @apply bg-white rounded-card;
+    @apply border border-baseline-200;
+  }
+
+  .card-hover {
+    @apply hover:border-baseline-300 hover:shadow-card-hover;
+  }
+
+  /* Section label */
+  .section-label {
+    @apply text-xs font-semibold tracking-widest uppercase;
+    @apply text-baseline-500;
+  }
+
+  /* Checkbox card (selectable option) */
+  .checkbox-card {
+    @apply flex items-center gap-3;
+    @apply px-4 py-3 rounded-lg;
+    @apply bg-white;
+    @apply border border-baseline-300;
+    @apply cursor-pointer;
+    @apply transition-all duration-100 ease-out;
+    @apply hover:border-baseline-400;
+  }
+
+  .checkbox-card[data-selected="true"] {
+    @apply bg-court-50 border-court;
+  }
+
+  /* Progress bar */
+  .progress-bar {
+    @apply w-full h-1 rounded-full;
+    @apply bg-baseline-200;
+    @apply overflow-hidden;
+  }
+
+  .progress-bar-fill {
+    @apply h-full;
+    @apply bg-court;
+    @apply transition-all duration-300 ease-out;
+  }
+
+  /* Video player container */
+  .video-container {
+    @apply relative rounded-lg;
+    @apply aspect-video;
+    @apply bg-blacktop;
+    @apply overflow-hidden;
+  }
+
+  /* Table */
+  .table {
+    @apply w-full;
+    @apply text-sm;
+  }
+
+  .table th {
+    @apply px-4 py-3;
+    @apply text-left text-xs font-semibold tracking-wider uppercase;
+    @apply text-baseline-500;
+    @apply border-b border-baseline-200;
+  }
+
+  .table td {
+    @apply px-4 py-3;
+    @apply border-b border-baseline-100;
+  }
+
+  .table tr:hover td {
+    @apply bg-baseline-50;
+  }
+
+  /* Badge */
+  .badge {
+    @apply inline-flex items-center rounded-full;
+    @apply px-2.5 py-0.5;
+    @apply text-xs font-medium;
+  }
+
+  .badge-success {
+    @apply bg-green-100 text-green-700;
+  }
+
+  .badge-warning {
+    @apply bg-yellow-100 text-yellow-700;
+  }
+
+  .badge-error {
+    @apply bg-red-100 text-red-700;
+  }
+
+  .badge-info {
+    @apply bg-blue-100 text-blue-700;
+  }
+
+  .badge-neutral {
+    @apply bg-baseline-100 text-baseline-600;
+  }
+}
+
+/* Utility classes */
+@layer utilities {
+  /* Hide scrollbar but keep functionality */
+  .scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* Text balance */
+  .text-balance {
+    text-wrap: balance;
+  }
+
+  /* Accent text */
+  .text-accent {
+    @apply text-court;
+  }
+}
