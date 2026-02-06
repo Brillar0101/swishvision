@@ -23,7 +23,7 @@ result = tracker.process_video_with_tracking(
     max_total_objects=20,            # Track up to 20 objects (balance between coverage and memory)
     use_court_mask_filter=True,      # Filter to only on-court detections
     max_seconds=None,                # Process full video
-    resume=False                     # Start fresh with new chunked SAM2 saving
+    resume=True                     # Start fresh with new chunked SAM2 saving
 )
 
 print('\n=== Pipeline Complete ===')
