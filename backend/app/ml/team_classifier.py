@@ -115,7 +115,71 @@ class TeamClassifier:
         self._kmeans.fit(embeddings)
 
         self.is_fitted = True
+
+        # Log cluster distribution
+        labels = self._kmeans.labels_
+        for c in range(self.n_teams):
+            count = int(np.sum(labels == c))
+            print(f"  Cluster {c}: {count} crops")
         print(f"  Team classifier trained on {len(crops)} crops")
+
+        # Store crops and labels for color analysis
+        self._training_crops = crops
+        self._training_labels = labels
+
+    def get_cluster_avg_colors(self) -> Dict[int, Tuple[float, float, float]]:
+        """
+        Compute the average HSV color for each cluster's crops.
+
+        Returns:
+            Dict mapping cluster_id -> (avg_hue, avg_saturation, avg_value)
+        """
+        if not hasattr(self, '_training_crops') or self._training_crops is None:
+            return {}
+
+        cluster_colors = {}
+        for c in range(self.n_teams):
+            cluster_mask = self._training_labels == c
+            cluster_crops = [self._training_crops[i] for i in range(len(self._training_crops)) if cluster_mask[i]]
+
+            if not cluster_crops:
+                cluster_colors[c] = (0.0, 0.0, 0.0)
+                continue
+
+            avg_hsv = []
+            for crop in cluster_crops:
+                if crop.size == 0:
+                    continue
+                hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
+                avg_hsv.append(hsv.mean(axis=(0, 1)))
+
+            if avg_hsv:
+                avg = np.mean(avg_hsv, axis=0)
+                cluster_colors[c] = (float(avg[0]), float(avg[1]), float(avg[2]))
+            else:
+                cluster_colors[c] = (0.0, 0.0, 0.0)
+
+        return cluster_colors
+
+    def get_lighter_cluster(self) -> int:
+        """
+        Determine which cluster has lighter/whiter jerseys based on HSV analysis.
+        Higher value + lower saturation = lighter/whiter jersey.
+
+        Returns:
+            Cluster ID of the lighter team (0 or 1)
+        """
+        colors = self.get_cluster_avg_colors()
+        if not colors or len(colors) < 2:
+            return 0
+
+        # Score = high value + low saturation means lighter jersey
+        scores = {}
+        for c, (h, s, v) in colors.items():
+            scores[c] = v - s  # Higher value, lower saturation = lighter
+            print(f"  Cluster {c} avg HSV: H={h:.1f} S={s:.1f} V={v:.1f} (lightness_score={scores[c]:.1f})")
+
+        return max(scores, key=scores.get)
 
     def predict(self, crops: List[np.ndarray]) -> List[int]:
         """

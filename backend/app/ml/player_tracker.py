@@ -1145,19 +1145,23 @@ class PlayerTracker:
             # ============ STAGE 3: Team Classifier Training ============
             team_classifier = self._train_team_classifier(all_crops, team_names, checkpoint, resume)
 
-            # HARDCODED team assignment (K-means cluster IDs are arbitrary)
-            # Based on visual inspection: cluster 0 = Pacers (yellow), cluster 1 = OKC (white)
+            # Auto-detect which cluster is which team using jersey color analysis
+            # team_names convention: (lighter/white jersey team, darker/colored jersey team)
+            lighter_cluster = team_classifier.get_lighter_cluster()
+            darker_cluster = 1 - lighter_cluster
+            print(f"  Auto-detected: cluster {lighter_cluster} = lighter jerseys, cluster {darker_cluster} = darker jerseys")
+
             team_classifier.team_names = {
-                0: "Indiana Pacers",
-                1: "Oklahoma City Thunder"
+                lighter_cluster: team_names[0],  # First team name = lighter/white jerseys
+                darker_cluster: team_names[1],   # Second team name = darker/colored jerseys
             }
 
-            # Swap if requested (toggle the hardcoded assignment)
+            # Swap if requested (toggle the auto-detected assignment)
             if swap_teams:
-                print("  Swapping team assignments (cluster 0 <-> cluster 1)")
+                print("  Swapping team assignments")
                 team_classifier.team_names = {
-                    0: "Oklahoma City Thunder",
-                    1: "Indiana Pacers"
+                    lighter_cluster: team_names[1],
+                    darker_cluster: team_names[0],
                 }
 
             # Set team colors based on actual team names (BGR format for OpenCV)
@@ -1625,7 +1629,7 @@ class PlayerTracker:
                 for obj_id, info in tracking_info.items():
                     if 'team' not in info:
                         info['team'] = 0
-                        info['team_name'] = team_names[0]
+                        info['team_name'] = team_classifier.get_team_name(0)
 
                 checkpoint.save_data('tracking_info_with_teams', tracking_info)
                 checkpoint.mark_stage_complete('teams_assigned')
