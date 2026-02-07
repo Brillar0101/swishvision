@@ -16,7 +16,7 @@ tracker = PlayerTracker()
 result = tracker.process_video_with_tracking(
     video_path='../test_videos/test_game.mp4',
     output_dir='portfolio_outputs_full',
-    team_names=('Oklahoma City Thunder', 'Indiana Pacers'),  # white=thunder, yellow=pacers
+    team_names=('Indiana Pacers', 'Oklahoma City Thunder'),  # yellow=pacers (lighter), white=thunder (darker)
     use_bytetrack=True,              # ByteTrack for persistent IDs
     use_sam2_segmentation=True,      # SAM2 for pixel-perfect masks
     use_streaming_sam2=True,         # Streaming mode (falls back to batch if unavailable)
