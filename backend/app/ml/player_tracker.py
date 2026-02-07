@@ -89,6 +89,19 @@ class TeamClassifierWrapper:
         """Get team name."""
         return self.team_names.get(team_id, f"Team {team_id}")
 
+    def get_lighter_cluster(self) -> int:
+        """Delegate to underlying classifier's color analysis."""
+        if hasattr(self._classifier, 'get_lighter_cluster'):
+            return self._classifier.get_lighter_cluster()
+        # Fallback: return 0 if method not available
+        return 0
+
+    def get_cluster_avg_colors(self):
+        """Delegate to underlying classifier's color analysis."""
+        if hasattr(self._classifier, 'get_cluster_avg_colors'):
+            return self._classifier.get_cluster_avg_colors()
+        return {}
+
 
 # Use wrapper as TeamClassifier
 TeamClassifier = TeamClassifierWrapper
