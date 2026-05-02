@@ -123,9 +123,23 @@ class TeamClassifier:
             print(f"  Cluster {c}: {count} crops")
         print(f"  Team classifier trained on {len(crops)} crops")
 
-        # Store crops and labels for color analysis
+        # Store crops and labels for color analysis. These are excluded from
+        # pickling via __getstate__ so checkpoint files don't balloon with
+        # thousands of raw BGR crops.
         self._training_crops = crops
         self._training_labels = labels
+
+    def __getstate__(self) -> dict:
+        """Drop bulky training-time arrays from the pickle payload.
+
+        Without this, every checkpoint embeds the training crops list (often
+        thousands of small BGR arrays plus their cluster labels), inflating the
+        pickle by 100s of MB and slowing checkpoint resume.
+        """
+        state = self.__dict__.copy()
+        state.pop("_training_crops", None)
+        state.pop("_training_labels", None)
+        return state
 
     def get_cluster_avg_colors(self) -> Dict[int, Tuple[float, float, float]]:
         """

@@ -7,6 +7,7 @@ Based on Roboflow's basketball AI notebook implementation.
 REFACTORED VERSION: Extracted pipeline stages into separate methods for better maintainability.
 """
 import os
+import warnings
 import cv2
 import numpy as np
 import torch
@@ -93,7 +94,14 @@ class TeamClassifierWrapper:
         """Delegate to underlying classifier's color analysis."""
         if hasattr(self._classifier, 'get_lighter_cluster'):
             return self._classifier.get_lighter_cluster()
-        # Fallback: return 0 if method not available
+        warnings.warn(
+            f"Underlying classifier {type(self._classifier).__name__} has no "
+            "get_lighter_cluster(); team auto-detection is bypassed and cluster 0 "
+            "will be treated as the lighter team. Update the wrapper or the "
+            "classifier to silence this warning.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
         return 0
 
     def get_cluster_avg_colors(self):
@@ -1449,12 +1457,17 @@ class PlayerTracker:
 
                                                     next_sam2_id += 1
                                                     new_added += 1
-                                                except (NotImplementedError, TypeError) as e:
-                                                    # SAM2 version doesn't support adding prompts mid-stream
-                                                    # (raises NotImplemented which causes TypeError, or NotImplementedError)
-                                                    # Fall back to tracking only players detected in frame 0
-                                                    if frame_idx == keyframe_indices[1] if len(keyframe_indices) > 1 else 15:  # Only warn once
-                                                        print(f"Warning: SAM2 add_new_prompt_during_track not supported ({type(e).__name__}). Only tracking players from frame 0.")
+                                                except NotImplementedError as e:
+                                                    # SAM2 version doesn't support adding prompts mid-stream.
+                                                    # Fall back to tracking only players detected in frame 0.
+                                                    first_warn_frame = (
+                                                        keyframe_indices[1] if len(keyframe_indices) > 1 else frame_idx
+                                                    )
+                                                    if frame_idx == first_warn_frame:
+                                                        print(
+                                                            f"Warning: SAM2 add_new_prompt_during_track not supported "
+                                                            f"({type(e).__name__}: {e}). Only tracking players from frame 0."
+                                                        )
                                                     break
 
                                             if new_added > 0:
