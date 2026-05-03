@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git checkout *)",
+      "Bash(git mv *)",
+      "Bash(mv backend/scripts/train_rfdetr_cluster.sh scripts/slurm/train_rfdetr.sbatch)",
+      "Bash(ls scripts/ scripts/slurm/ docs/)",
+      "Bash(rm -rf backend/__pycache__ backend/.pytest_cache backend/app/ml/__pycache__ backend/app)",
+      "Bash(rmdir backend/scripts backend/training backend/uploads)",
+      "Bash(rm -rf backend/portfolio_outputs_streaming)"
+    ]
+  }
+}

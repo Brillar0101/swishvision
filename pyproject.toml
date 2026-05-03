@@ -1,0 +1,92 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "swishvision"
+version = "1.0.0"
+description = "Offline computer-vision pipeline for post-game basketball analytics."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+    { name = "Barakaeli Lawuo", email = "barakaeli@vt.edu" },
+]
+license = { text = "Proprietary" }
+keywords = ["basketball", "computer-vision", "sam2", "rf-detr", "siglip"]
+
+# Pinned-ish runtime deps. Versions match what's tested on Tinkercliffs A100/H200.
+# Heavy ML deps (torch, sam2, inference) are listed but may need site-specific
+# wheels; install via `pip install -e .[gpu]` once those wheels are available.
+dependencies = [
+    "numpy>=1.24",
+    "opencv-python>=4.8",
+    "scikit-learn>=1.3",
+    "scipy>=1.11",
+    "supervision>=0.16",
+    "tqdm>=4.65",
+    "Pillow>=10.0",
+    "python-dotenv>=1.0",
+    "torch>=2.0",
+    "torchvision>=0.15",
+    "inference>=0.9",
+    "roboflow>=1.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=4.1",
+    "ruff>=0.4",
+    "black>=24.0",
+    "mypy>=1.8",
+]
+api = [
+    "fastapi>=0.104",
+    "uvicorn[standard]>=0.24",
+    "sqlalchemy>=2.0",
+    "alembic>=1.12",
+    "pydantic>=2.0",
+    "pydantic-settings>=2.0",
+    "python-jose[cryptography]>=3.3",
+    "passlib[bcrypt]>=1.7.4",
+    "boto3>=1.28",
+]
+
+[project.scripts]
+swishvision = "swishvision.cli:main"
+
+[project.urls]
+Repository = "https://github.com/Brillar0101/swishvision"
+Documentation = "https://github.com/Brillar0101/swishvision/blob/main/docs/SPECIFICATION.md"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+markers = [
+    "unit: fast, no I/O, no GPU",
+    "integration: GPU/CPU heavy, may write disk",
+    "acceptance: end-to-end against test_videos/test_game.mp4",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+extend-select = ["E", "F", "I", "B", "UP", "N"]
+ignore = ["E501"]  # line length is enforced by formatter
+
+[tool.black]
+line-length = 100
+target-version = ["py310"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = false
+ignore_missing_imports = true
