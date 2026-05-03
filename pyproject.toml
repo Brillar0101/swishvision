@@ -1,5 +1,8 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+# setuptools >=64 is required for PEP 660 editable installs (`pip install -e .`).
+# >=68 is preferred. Users on older venvs should `pip install -U pip setuptools wheel`
+# before `pip install -e .`.
+requires = ["setuptools>=64", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]

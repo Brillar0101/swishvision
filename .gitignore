@@ -71,8 +71,4 @@ logs/
 torch_cache/
 Context.txt
 
-# =============================================================================
-# SAM2 camera-predictor patch (installed via scripts/install_*.sh on cluster)
-# =============================================================================
-scripts/sam2_camera_predictor.py
-scripts/install_sam2_camera_predictor.sh
+# SAM2 camera-predictor patch lives under scripts/ and IS tracked.
