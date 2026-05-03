@@ -7,7 +7,7 @@ name = "swishvision"
 version = "1.0.0"
 description = "Offline computer-vision pipeline for post-game basketball analytics."
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.9"
 authors = [
     { name = "Barakaeli Lawuo", email = "barakaeli@vt.edu" },
 ]
