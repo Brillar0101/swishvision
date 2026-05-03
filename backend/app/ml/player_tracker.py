@@ -1320,9 +1320,6 @@ class PlayerTracker:
                     print("Adding SAM2 segmentation to ByteTrack results...")
                     print("Loading SAM2 model...")
 
-                    use_autocast = self.device.type == "cuda"
-                    autocast_dtype = torch.float16 if use_autocast else torch.float32
-
                     if use_streaming_sam2 and CAMERA_PREDICTOR_AVAILABLE:
                         # ============ Streaming Mode: Frame-by-frame camera predictor ============
                         print("Using SAM2 streaming camera predictor (immediate start)...")
@@ -1331,10 +1328,15 @@ class PlayerTracker:
                             ckpt_path=self.sam2_checkpoint,
                             device=self.device,
                         )
+                        # Force every SAM2 submodule to float32. SAM2 internally
+                        # autocasts to bfloat16 on H200/A100 with newer PyTorch,
+                        # which clashes with float32 cached activations and
+                        # raises "mat1/mat2 dtype mismatch" in memory_attention.
+                        predictor.model.float()
 
                         video_segments = {}
 
-                        with torch.inference_mode(), torch.amp.autocast(device_type=self.device.type, dtype=autocast_dtype, enabled=use_autocast):
+                        with torch.inference_mode():
                             # Following the reference notebook pattern EXACTLY:
                             # 1. Run RF-DETR detection on frame 0 (NOT from ByteTrack)
                             # 2. Assign IDs 1, 2, 3, ... manually to all detections
@@ -1540,11 +1542,13 @@ class PlayerTracker:
                     ckpt_path=self.sam2_checkpoint,
                     device=self.device,
                 )
+                # See note above (streaming branch). Force fp32 to avoid
+                # SAM2's internal bfloat16 autocast clashing with cached
+                # float32 activations.
+                predictor.model.float()
 
                 print("Initializing video tracking...")
-                use_autocast = self.device.type == "cuda"
-                autocast_dtype = torch.float16 if use_autocast else torch.float32
-                with torch.inference_mode(), torch.amp.autocast(device_type="cuda", dtype=autocast_dtype, enabled=use_autocast):
+                with torch.inference_mode():
                     inference_state = predictor.init_state(video_path=frames_dir)
 
                     tracking_info = {}
