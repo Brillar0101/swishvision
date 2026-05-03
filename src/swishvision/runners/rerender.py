@@ -28,8 +28,8 @@ log = logging.getLogger(__name__)
 # High-contrast BGR overrides (per project preference). See memory entry
 # ``project_team_color_gotcha``.
 TEAM_COLOR_OVERRIDES_BGR: Dict[str, Tuple[int, int, int]] = {
-    "Oklahoma City Thunder": (255, 0, 0),    # pure blue
-    "Indiana Pacers":        (0, 255, 255),  # pure yellow
+    "Oklahoma City Thunder": (255, 0, 0),     # pure blue (BGR)
+    "Indiana Pacers":        (48, 187, 253),  # Pacers gold #FDBB30 in BGR
 }
 REFEREE_COLOR_BGR: Tuple[int, int, int] = (0, 165, 255)  # orange
 
